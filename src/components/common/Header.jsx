@@ -37,7 +37,6 @@ const Header = () => {
     return names[role] || role || "User";
   };
 
-  // Get user's display name
   const getDisplayName = () => {
     if (profile?.full_name) return profile.full_name;
     if (profile?.email) return profile.email.split("@")[0];
@@ -45,18 +44,18 @@ const Header = () => {
   };
 
   return (
-    <header className="bg-white shadow-sm h-16 flex items-center justify-between px-3 sm:px-4 md:px-6">
+    <header className="bg-white shadow-sm h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 md:px-6">
       <div className="flex items-center min-w-0">
-        <h2 className="text-sm sm:text-base md:text-lg font-semibold text-gray-700 truncate">
+        <h2 className="text-xs sm:text-sm md:text-base lg:text-lg font-semibold text-gray-700 truncate">
           Compliance Orchestration Platform
         </h2>
       </div>
 
-      <div className="flex items-center space-x-2 sm:space-x-3 md:space-x-4 flex-shrink-0">
+      <div className="flex items-center space-x-1 sm:space-x-2 md:space-x-3 lg:space-x-4 flex-shrink-0">
         {/* Notification Bell */}
-        <button className="relative p-1.5 sm:p-2 text-gray-400 hover:text-gray-600">
+        <button className="relative p-1 sm:p-1.5 md:p-2 text-gray-400 hover:text-gray-600">
           <svg
-            className="h-5 w-5 sm:h-6 sm:w-6"
+            className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -68,28 +67,28 @@ const Header = () => {
               d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
             />
           </svg>
-          <span className="absolute top-0.5 right-0.5 sm:top-1 sm:right-1 h-1.5 w-1.5 sm:h-2 sm:w-2 bg-red-500 rounded-full"></span>
+          <span className="absolute top-0 right-0 sm:top-0.5 sm:right-0.5 h-1.5 w-1.5 sm:h-2 sm:w-2 bg-red-500 rounded-full"></span>
         </button>
 
         {/* User Profile */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center space-x-2 sm:space-x-3 focus:outline-none"
+            className="flex items-center space-x-1 sm:space-x-2 md:space-x-3 focus:outline-none"
           >
-            <div className="h-7 w-7 sm:h-8 sm:w-8 rounded-full bg-[#8cc63e] flex items-center justify-center text-white font-medium text-xs sm:text-sm">
+            <div className="h-6 w-6 sm:h-7 sm:w-7 md:h-8 md:w-8 rounded-full bg-[#8cc63e] flex items-center justify-center text-white font-medium text-xs sm:text-sm">
               {getDisplayName().charAt(0).toUpperCase()}
             </div>
-            <div className="hidden sm:block text-left">
-              <p className="text-xs sm:text-sm font-medium text-gray-700 truncate max-w-[100px] md:max-w-[150px]">
+            <div className="hidden xs:block text-left">
+              <p className="text-xs sm:text-sm font-medium text-gray-700 truncate max-w-[60px] sm:max-w-[100px] md:max-w-[150px]">
                 {getDisplayName()}
               </p>
-              <p className="text-[10px] sm:text-xs text-gray-500 truncate max-w-[100px] md:max-w-[150px]">
+              <p className="text-[8px] sm:text-[10px] md:text-xs text-gray-500 truncate max-w-[60px] sm:max-w-[100px] md:max-w-[150px]">
                 {profile?.email || ""}
               </p>
             </div>
             <svg
-              className="h-3 w-3 sm:h-4 sm:w-4 text-gray-400"
+              className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 text-gray-400"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -105,14 +104,14 @@ const Header = () => {
 
           {/* Dropdown */}
           {isDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-56 sm:w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
-              <div className="px-4 py-3 border-b">
-                <p className="text-sm font-medium text-gray-900 truncate">
+            <div className="absolute right-0 mt-2 w-48 sm:w-56 md:w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
+              <div className="px-3 sm:px-4 py-2 sm:py-3 border-b">
+                <p className="text-xs sm:text-sm font-medium text-gray-900 truncate">
                   {getDisplayName()}
                 </p>
-                <p className="text-xs text-gray-500 truncate">{profile?.email}</p>
+                <p className="text-[10px] sm:text-xs text-gray-500 truncate">{profile?.email}</p>
                 <span
-                  className={`inline-block mt-1 px-2 py-1 text-xs font-medium rounded-full ${getRoleBadge(profile?.role)}`}
+                  className={`inline-block mt-1 px-1.5 sm:px-2 py-0.5 sm:py-1 text-[10px] sm:text-xs font-medium rounded-full ${getRoleBadge(profile?.role)}`}
                 >
                   {getRoleDisplayName(profile?.role)}
                 </span>
@@ -121,13 +120,13 @@ const Header = () => {
               <div className="py-1">
                 <Link
                   to="/profile"
-                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-gray-100"
                 >
                   Your Profile
                 </Link>
                 <Link
                   to="/settings"
-                  className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-gray-100"
                 >
                   Settings
                 </Link>
@@ -136,7 +135,7 @@ const Header = () => {
               <div className="border-t">
                 <button
                   onClick={logout}
-                  className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+                  className="block w-full text-left px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-red-600 hover:bg-gray-100"
                 >
                   Sign out
                 </button>

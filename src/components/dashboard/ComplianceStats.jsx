@@ -1,20 +1,17 @@
 const ComplianceStats = ({ stats }) => {
-  // Calculate percentage safely to avoid division by zero
   const calculatePercentage = (completed, total) => {
     if (total === 0) return 0;
     return Math.round((completed / total) * 100);
   };
 
-  // Calculate overall compliance percentage
   const overallCompliance = calculatePercentage(
     stats.completed || 0,
     stats.totalObligations || 0,
   );
 
-  // Half-circle Speedometer component
   const HalfSpeedometer = ({ percentage }) => {
-    const radius = 40;
-    const strokeWidth = 10;
+    const radius = 35;
+    const strokeWidth = 8;
     const circumference = Math.PI * radius;
 
     const halfCircumference = circumference;
@@ -33,22 +30,16 @@ const ComplianceStats = ({ stats }) => {
 
     return (
       <div className="relative inline-flex items-center justify-start w-full">
-        <svg 
-          className="w-full max-w-[70px] xs:max-w-[80px] sm:max-w-[90px] md:max-w-[110px] lg:max-w-[130px] h-12 xs:h-14 sm:h-16 md:h-18 lg:h-20 mx-auto" 
-          viewBox="0 0 120 65"
-        >
-          {/* Background arc - half circle from left to right */}
+        <svg className="w-full max-w-[70px] xs:max-w-[80px] sm:max-w-[90px] md:max-w-[110px] lg:max-w-[130px] h-12 xs:h-14 sm:h-16 md:h-18 lg:h-20 mx-auto" viewBox="0 0 100 55">
           <path
-            d="M 20 50 A 40 40 0 0 1 100 50"
+            d="M 15 45 A 35 35 0 0 1 85 45"
             fill="none"
             stroke="#e5e7eb"
             strokeWidth={strokeWidth}
             strokeLinecap="round"
           />
-
-          {/* Progress arc - half circle with dash array */}
           <path
-            d="M 20 50 A 40 40 0 0 1 100 50"
+            d="M 15 45 A 35 35 0 0 1 85 45"
             fill="none"
             stroke={color}
             strokeWidth={strokeWidth}
@@ -57,11 +48,9 @@ const ComplianceStats = ({ stats }) => {
             strokeDashoffset={dashOffset}
             className="transition-all duration-1000 ease-in-out"
           />
-
-          {/* Percentage text inside speedometer */}
           <text
-            x="60"
-            y="44"
+            x="50"
+            y="38"
             textAnchor="middle"
             className="text-base xs:text-lg sm:text-xl md:text-2xl font-bold"
             fill={color}
@@ -69,10 +58,10 @@ const ComplianceStats = ({ stats }) => {
             {percentage}%
           </text>
           <text
-            x="60"
-            y="56"
+            x="50"
+            y="48"
             textAnchor="middle"
-            className="text-[6px] xs:text-[7px] sm:text-[8px] md:text-[9px] lg:text-[10px]"
+            className="text-[6px] xs:text-[7px] sm:text-[8px] md:text-[10px]"
             fill="#9ca3af"
           >
             Compliance
@@ -145,36 +134,34 @@ const ComplianceStats = ({ stats }) => {
   };
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
+    <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 gap-2 sm:gap-3 md:gap-4">
       {statCards.map((stat, index) => (
         <div
           key={index}
-          className="bg-white rounded-lg shadow hover:shadow-lg transition-all duration-300 border-l-4 flex flex-col h-full hover:scale-[1.01]"
+          className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow border-l-4 flex flex-col h-full"
           style={{
             borderLeftColor: getBorderColor(stat.color),
           }}
         >
-          <div className="p-3 sm:p-4 md:p-5 flex-1 flex flex-col">
+          <div className="p-2 sm:p-3 md:p-4 lg:p-5 flex-1 flex flex-col">
             {!stat.isSpeedometer ? (
               <div className="flex items-center justify-between flex-1">
-                {/* Left side - Text content for regular cards */}
-                <div className="flex-1 min-w-0 pr-2">
-                  <p className="text-[10px] xs:text-[11px] sm:text-xs text-gray-500 font-medium whitespace-normal break-words">
+                <div className="flex-1 min-w-0 pr-1 sm:pr-2">
+                  <p className="text-[8px] xs:text-[9px] sm:text-[10px] md:text-xs text-gray-500 font-medium whitespace-normal break-words">
                     {stat.title}
                   </p>
-                  <p className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-900 leading-tight mt-2 sm:mt-3 md:mt-4">
+                  <p className="text-base xs:text-lg sm:text-xl md:text-2xl font-bold text-gray-900 leading-tight mt-2 sm:mt-3 md:mt-4">
                     {stat.value}
                   </p>
-                  <p className="text-[8px] xs:text-[9px] sm:text-[10px] text-gray-500 mt-2 sm:mt-3 md:mt-4 whitespace-normal break-words">
+                  <p className="text-[7px] xs:text-[8px] sm:text-[9px] md:text-[10px] text-gray-500 mt-2 sm:mt-3 md:mt-4 whitespace-normal break-words">
                     {stat.subtitle}
                   </p>
                 </div>
-                {/* Right side - Icon */}
                 <div
-                  className={`flex-shrink-0 p-1.5 sm:p-2 md:p-2.5 rounded-full ${getColorClasses(stat.color)}`}
+                  className={`flex-shrink-0 p-1 sm:p-1.5 md:p-2 lg:p-2.5 rounded-full ${getColorClasses(stat.color)}`}
                 >
                   <svg
-                    className="h-3.5 w-3.5 sm:h-4 sm:w-4 md:h-5 md:w-5 lg:h-6 lg:w-6"
+                    className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 lg:h-5 lg:w-5"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -190,18 +177,13 @@ const ComplianceStats = ({ stats }) => {
               </div>
             ) : (
               <div className="flex flex-col items-center flex-1 justify-center">
-                {/* Title */}
-                <p className="text-[10px] xs:text-[11px] sm:text-xs text-gray-500 font-medium text-center w-full whitespace-normal break-words">
+                <p className="text-[8px] xs:text-[9px] sm:text-[10px] md:text-xs text-gray-500 font-medium text-center w-full whitespace-normal break-words">
                   {stat.title}
                 </p>
-
-                {/* Speedometer in the middle */}
                 <div className="my-0.5 sm:my-1 w-full flex justify-center">
                   <HalfSpeedometer percentage={stat.percentage} />
                 </div>
-
-                {/* Subtitle */}
-                <p className="text-[8px] xs:text-[9px] sm:text-[10px] text-gray-500 text-center w-full whitespace-normal break-words">
+                <p className="text-[7px] xs:text-[8px] sm:text-[9px] md:text-[10px] text-gray-500 text-center w-full whitespace-normal break-words">
                   {stat.subtitle}
                 </p>
               </div>

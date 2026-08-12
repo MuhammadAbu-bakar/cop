@@ -11,9 +11,6 @@ import JSZip from "jszip";
 
 const Reports = () => {
   const [reportType, setReportType] = useState("compliance-summary");
-  const [dateRange, setDateRange] = useState("custom");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
   const [loading, setLoading] = useState(true);
   const [reportData, setReportData] = useState(null);
   const [obligations, setObligations] = useState([]);
@@ -22,39 +19,118 @@ const Reports = () => {
   const [domainData, setDomainData] = useState({ domains: [], compliance: [] });
   const [downloading, setDownloading] = useState(false);
   const [allEvidence, setAllEvidence] = useState([]);
+  
+  // Filter states
+  const [selectedDomain, setSelectedDomain] = useState("");
+  const [selectedPolicy, setSelectedPolicy] = useState("");
+  const [selectedClause, setSelectedClause] = useState("");
+  const [selectedSubRegion, setSelectedSubRegion] = useState("");
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [selectedYear, setSelectedYear] = useState("");
+  
+  // Available options for filters
+  const [domains, setDomains] = useState([]);
+  const [policies, setPolicies] = useState([]);
+  const [clauses, setClauses] = useState([]);
+  const [subRegions, setSubRegions] = useState([]);
+  const [months] = useState([
+    { value: "01", label: "January" },
+    { value: "02", label: "February" },
+    { value: "03", label: "March" },
+    { value: "04", label: "April" },
+    { value: "05", label: "May" },
+    { value: "06", label: "June" },
+    { value: "07", label: "July" },
+    { value: "08", label: "August" },
+    { value: "09", label: "September" },
+    { value: "10", label: "October" },
+    { value: "11", label: "November" },
+    { value: "12", label: "December" },
+  ]);
+  const [years, setYears] = useState([]);
 
-  // Set default date range (last 30 days)
   useEffect(() => {
-    const today = new Date();
-    const thirtyDaysAgo = new Date(today);
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    setEndDate(today.toISOString().split("T")[0]);
-    setStartDate(thirtyDaysAgo.toISOString().split("T")[0]);
+    fetchFilterOptions();
+    fetchReportData();
   }, []);
 
   useEffect(() => {
-    if (startDate && endDate) {
+    if (selectedDomain || selectedPolicy || selectedClause || selectedSubRegion || selectedMonth || selectedYear) {
       fetchReportData();
     }
-  }, [reportType, dateRange, startDate, endDate]);
+  }, [selectedDomain, selectedPolicy, selectedClause, selectedSubRegion, selectedMonth, selectedYear]);
+
+  const fetchFilterOptions = async () => {
+    try {
+      // Fetch all obligations to get unique values
+      const { data: obligationsData } = await supabase
+        .from('obligations')
+        .select('domain, clause, policy_id, region');
+
+      if (obligationsData) {
+        // Get unique domains
+        const uniqueDomains = [...new Set(obligationsData.map(o => o.domain).filter(Boolean))];
+        setDomains(uniqueDomains);
+
+        // Get unique clauses
+        const uniqueClauses = [...new Set(obligationsData.map(o => o.clause).filter(Boolean))];
+        setClauses(uniqueClauses);
+
+        // Get unique sub-regions
+        const uniqueSubRegions = [...new Set(obligationsData.map(o => o.region).filter(Boolean))];
+        setSubRegions(uniqueSubRegions);
+
+        // Get policies
+        const { data: policiesData } = await supabase
+          .from('policies')
+          .select('id, name');
+        if (policiesData) {
+          setPolicies(policiesData);
+        }
+      }
+
+      // Generate years (last 5 years including current)
+      const currentYear = new Date().getFullYear();
+      const yearOptions = [];
+      for (let i = currentYear - 4; i <= currentYear; i++) {
+        yearOptions.push({ value: i.toString(), label: i.toString() });
+      }
+      setYears(yearOptions);
+
+    } catch (error) {
+      console.error('Error fetching filter options:', error);
+    }
+  };
 
   const fetchReportData = async () => {
     setLoading(true);
     try {
-      // Build date filter
+      // Build filters
+      const filters = {};
+      if (selectedDomain) filters.domain = selectedDomain;
+      if (selectedPolicy) filters.policy_id = selectedPolicy;
+      if (selectedClause) filters.clause = selectedClause;
+      if (selectedSubRegion) filters.region = selectedSubRegion;
+      
+      // Month and Year filters
       let dateFilter = {};
-      if (dateRange === "custom" && startDate && endDate) {
+      if (selectedMonth && selectedYear) {
+        const startDate = new Date(parseInt(selectedYear), parseInt(selectedMonth) - 1, 1);
+        const endDate = new Date(parseInt(selectedYear), parseInt(selectedMonth), 0);
         dateFilter = {
-          startDate: new Date(startDate).toISOString(),
-          endDate: new Date(endDate).toISOString(),
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
         };
-      } else {
-        const range = getDateRangeFilter(dateRange);
-        dateFilter = range;
+      } else if (selectedYear) {
+        const startDate = new Date(parseInt(selectedYear), 0, 1);
+        const endDate = new Date(parseInt(selectedYear), 11, 31);
+        dateFilter = {
+          startDate: startDate.toISOString(),
+          endDate: endDate.toISOString(),
+        };
       }
 
-      // Fetch all required data
+      // Fetch all required data with filters
       const [
         obligationsData,
         statsData,
@@ -62,7 +138,7 @@ const Reports = () => {
         regionsData,
         evidenceData,
       ] = await Promise.all([
-        getObligations(),
+        getObligations(filters),
         getDashboardStats(),
         getComplianceByDomain(),
         getRegions(),
@@ -75,8 +151,8 @@ const Reports = () => {
       setRegions(regionsData.data || []);
       setAllEvidence(evidenceData || []);
 
-      // Fetch filtered data for the selected date range
-      const filteredData = await fetchFilteredData(dateFilter);
+      // Fetch filtered data
+      const filteredData = await fetchFilteredData(filters, dateFilter);
 
       // Generate report based on type with filtered data
       generateReport(
@@ -123,44 +199,28 @@ const Reports = () => {
     }
   };
 
-  const getDateRangeFilter = (range) => {
-    const today = new Date();
-    let startDate = new Date();
-    let endDate = new Date(today);
-
-    switch (range) {
-      case "last-month":
-        startDate.setMonth(today.getMonth() - 1);
-        break;
-      case "last-quarter":
-        startDate.setMonth(today.getMonth() - 3);
-        break;
-      case "last-year":
-        startDate.setFullYear(today.getFullYear() - 1);
-        break;
-      case "custom":
-        return {
-          startDate: new Date(startDate).toISOString(),
-          endDate: new Date(endDate).toISOString(),
-        };
-      default:
-        startDate.setMonth(today.getMonth() - 1);
-    }
-
-    return {
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
-    };
-  };
-
-  const fetchFilteredData = async (dateFilter) => {
+  const fetchFilteredData = async (filters, dateFilter) => {
     try {
       let query = supabase.from("obligations").select(`
           *,
-          policy:policies(*),
-          instances:obligation_instances(*)
+          policy:policies(*)
         `);
 
+      // Apply filters
+      if (filters.domain) {
+        query = query.eq('domain', filters.domain);
+      }
+      if (filters.policy_id) {
+        query = query.eq('policy_id', filters.policy_id);
+      }
+      if (filters.clause) {
+        query = query.eq('clause', filters.clause);
+      }
+      if (filters.region) {
+        query = query.eq('region', filters.region);
+      }
+
+      // Apply date filters (created_at)
       if (dateFilter.startDate && dateFilter.endDate) {
         query = query
           .gte("created_at", dateFilter.startDate)
@@ -239,9 +299,13 @@ const Reports = () => {
       notStarted: obligations.filter((o) => o.current_status === "Not Started")
         .length,
       recentObligations: obligations.slice(0, 10),
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -256,9 +320,13 @@ const Reports = () => {
         acc[o.domain] = (acc[o.domain] || 0) + 1;
         return acc;
       }, {}),
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -273,9 +341,13 @@ const Reports = () => {
         acc[o.domain] = (acc[o.domain] || 0) + 1;
         return acc;
       }, {}),
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -312,9 +384,13 @@ const Reports = () => {
               "Maintain current compliance levels",
               "Continue regular monitoring",
             ],
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -346,9 +422,13 @@ const Reports = () => {
           ? regionalData.reduce((acc, r) => acc + r.complianceRate, 0) /
             regionalData.length
           : 0,
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -399,9 +479,13 @@ const Reports = () => {
       ).length,
       evidenceFiles: evidenceData,
       obligationsWithoutEvidence: obligationsWithEvidenceRequired,
-      dateRange: {
-        start: startDate,
-        end: endDate,
+      filters: {
+        domain: selectedDomain,
+        policy: selectedPolicy,
+        clause: selectedClause,
+        subRegion: selectedSubRegion,
+        month: selectedMonth,
+        year: selectedYear,
       },
     };
   };
@@ -494,12 +578,14 @@ const Reports = () => {
     { id: "evidence-report", name: "Evidence Report" },
   ];
 
-  const dateRanges = [
-    { value: "custom", label: "Custom Range" },
-    { value: "last-month", label: "Last Month" },
-    { value: "last-quarter", label: "Last Quarter" },
-    { value: "last-year", label: "Last Year" },
-  ];
+  const clearFilters = () => {
+    setSelectedDomain("");
+    setSelectedPolicy("");
+    setSelectedClause("");
+    setSelectedSubRegion("");
+    setSelectedMonth("");
+    setSelectedYear("");
+  };
 
   if (loading) {
     return (
@@ -516,25 +602,33 @@ const Reports = () => {
     <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0">
         <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Reports</h1>
-        <button
-          onClick={() => fetchReportData()}
-          className="w-full sm:w-auto px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors flex items-center justify-center text-sm sm:text-base"
-        >
-          <svg
-            className="h-4 w-4 mr-2"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={clearFilters}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors text-sm sm:text-base"
           >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-            />
-          </svg>
-          Refresh Data
-        </button>
+            Clear Filters
+          </button>
+          <button
+            onClick={() => fetchReportData()}
+            className="px-4 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors flex items-center text-sm sm:text-base"
+          >
+            <svg
+              className="h-4 w-4 mr-2"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+              />
+            </svg>
+            Refresh Data
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
@@ -563,51 +657,125 @@ const Reports = () => {
                 </select>
               </div>
 
-              <div>
-                <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
-                  Date Range
-                </label>
-                <select
-                  value={dateRange}
-                  onChange={(e) => setDateRange(e.target.value)}
-                  className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
-                >
-                  {dateRanges.map((range) => (
-                    <option key={range.value} value={range.value}>
-                      {range.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              <div className="border-t border-gray-200 pt-3 sm:pt-4">
+                <p className="text-xs sm:text-sm font-medium text-gray-700 mb-2">
+                  Filters
+                </p>
 
-              {dateRange === "custom" && (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <div>
-                    <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
-                      Start Date
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Domain
                     </label>
-                    <input
-                      type="date"
-                      value={startDate}
-                      onChange={(e) => setStartDate(e.target.value)}
-                      className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
-                    />
+                    <select
+                      value={selectedDomain}
+                      onChange={(e) => setSelectedDomain(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                    >
+                      <option value="">All Domains</option>
+                      {domains.map((domain) => (
+                        <option key={domain} value={domain}>
+                          {domain}
+                        </option>
+                      ))}
+                    </select>
                   </div>
+
                   <div>
-                    <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
-                      End Date
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Policy
                     </label>
-                    <input
-                      type="date"
-                      value={endDate}
-                      onChange={(e) => setEndDate(e.target.value)}
-                      className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
-                    />
+                    <select
+                      value={selectedPolicy}
+                      onChange={(e) => setSelectedPolicy(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                    >
+                      <option value="">All Policies</option>
+                      {policies.map((policy) => (
+                        <option key={policy.id} value={policy.id}>
+                          {policy.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Clause
+                    </label>
+                    <select
+                      value={selectedClause}
+                      onChange={(e) => setSelectedClause(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                    >
+                      <option value="">All Clauses</option>
+                      {clauses.map((clause) => (
+                        <option key={clause} value={clause}>
+                          {clause}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Sub Region
+                    </label>
+                    <select
+                      value={selectedSubRegion}
+                      onChange={(e) => setSelectedSubRegion(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                    >
+                      <option value="">All Sub Regions</option>
+                      {subRegions.map((region) => (
+                        <option key={region} value={region}>
+                          {region}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Month
+                      </label>
+                      <select
+                        value={selectedMonth}
+                        onChange={(e) => setSelectedMonth(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                      >
+                        <option value="">All Months</option>
+                        {months.map((month) => (
+                          <option key={month.value} value={month.value}>
+                            {month.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Year
+                      </label>
+                      <select
+                        value={selectedYear}
+                        onChange={(e) => setSelectedYear(e.target.value)}
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                      >
+                        <option value="">All Years</option>
+                        {years.map((year) => (
+                          <option key={year.value} value={year.value}>
+                            {year.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 </div>
-              )}
+              </div>
 
-              {/* Download Button - Moved inside Report Configuration */}
+              {/* Download Button */}
               <div className="pt-4 border-t border-gray-200">
                 <button
                   onClick={downloadAllDocuments}
@@ -674,10 +842,14 @@ const Reports = () => {
               <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                 {reportData?.title || "Report Preview"}
               </h3>
-              {reportData?.dateRange && (
-                <span className="text-[10px] sm:text-sm text-gray-500">
-                  Period: {reportData.dateRange.start || "N/A"} to{" "}
-                  {reportData.dateRange.end || "N/A"}
+              {reportData?.filters && (
+                <span className="text-[10px] sm:text-xs text-gray-500">
+                  {reportData.filters.domain && `Domain: ${reportData.filters.domain} `}
+                  {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
+                  {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
+                  {reportData.filters.month && reportData.filters.year && 
+                    `• ${months.find(m => m.value === reportData.filters.month)?.label} ${reportData.filters.year}`
+                  }
                 </span>
               )}
             </div>
@@ -1084,11 +1256,17 @@ const Reports = () => {
                   Preview of{" "}
                   {reports.find((r) => r.id === reportType)?.name}
                 </p>
-                <p className="text-[8px] sm:text-xs mt-0.5 sm:mt-1">
-                  {reportData?.dateRange
-                    ? `Filtered from ${reportData.dateRange.start || "N/A"} to ${reportData.dateRange.end || "N/A"}`
-                    : "Full report available for export"}
-                </p>
+                {reportData?.filters && (
+                  <p className="text-[8px] sm:text-xs mt-0.5 sm:mt-1">
+                    {reportData.filters.domain && `Domain: ${reportData.filters.domain} `}
+                    {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
+                    {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
+                    {reportData.filters.subRegion && `• Sub Region: ${reportData.filters.subRegion} `}
+                    {reportData.filters.month && reportData.filters.year && 
+                      `• ${months.find(m => m.value === reportData.filters.month)?.label} ${reportData.filters.year}`
+                    }
+                  </p>
+                )}
               </div>
             </div>
           </div>

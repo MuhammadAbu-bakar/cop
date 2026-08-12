@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import zongLogo from "../../assets/images/zong-logo.jpg";
@@ -6,8 +5,6 @@ import zongLogo from "../../assets/images/zong-logo.jpg";
 const Sidebar = () => {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
-  const [isMobileOpen, setIsMobileOpen] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const navigation = [
     {
@@ -42,7 +39,6 @@ const Sidebar = () => {
     },
   ];
 
-  // Add Policies and Admin for admin users
   if (isAdmin) {
     navigation.splice(6, 0, {
       name: "Policies",
@@ -57,143 +53,41 @@ const Sidebar = () => {
     });
   }
 
-  const toggleMobileSidebar = () => {
-    setIsMobileOpen(!isMobileOpen);
-  };
-
-  const toggleCollapse = () => {
-    setIsCollapsed(!isCollapsed);
-  };
-
   return (
     <>
-      {/* Mobile Hamburger Button */}
-      <button
-        onClick={toggleMobileSidebar}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 rounded-lg bg-[#8cc63e] text-white shadow-lg hover:bg-[#7ab32e] transition-colors"
-        aria-label="Toggle sidebar"
-      >
-        <svg
-          className="h-6 w-6"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          {isMobileOpen ? (
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M6 18L18 6M6 6l12 12"
-            />
-          ) : (
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M4 6h16M4 12h16M4 18h16"
-            />
-          )}
-        </svg>
-      </button>
-
-      {/* Overlay for mobile */}
-      {isMobileOpen && (
-        <div
-          className="lg:hidden fixed inset-0 bg-black bg-opacity-50 z-40"
-          onClick={toggleMobileSidebar}
-        />
-      )}
-
-      {/* Sidebar */}
-      <div
-        className={`
-          fixed lg:static top-0 left-0 h-screen bg-white shadow-lg flex flex-col z-50
-          transition-all duration-300 ease-in-out
-          ${isCollapsed ? 'w-20' : 'w-64'}
-          ${isMobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-        `}
-      >
-        {/* Logo Section */}
-        <div className={`
-          flex items-center justify-center px-4 border-b border-gray-200
-          ${isCollapsed ? 'h-24' : 'h-28'}
-          transition-all duration-300
-        `}>
-          {!isCollapsed ? (
-            <div className="flex items-center space-x-3 w-full">
-              <div className="w-14 h-14 md:w-16 md:h-16 rounded-lg overflow-hidden flex-shrink-0">
-                <img
-                  src={zongLogo}
-                  alt="Zong Logo"
-                  className="w-full h-full object-contain"
-                />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h1 className="text-xl md:text-2xl font-bold text-gray-800 truncate">
-                  Compliance
-                </h1>
-                <p className="text-[10px] md:text-xs text-gray-500 truncate">
-                  Orchestration Platform
-                </p>
-              </div>
-            </div>
-          ) : (
-            <div className="w-14 h-14 md:w-16 md:h-16 rounded-lg overflow-hidden">
+      {/* Desktop Sidebar */}
+      <div className="hidden md:flex md:w-56 lg:w-64 bg-white shadow-lg flex-col h-screen fixed left-0 top-0 z-30">
+        <div className="h-24 lg:h-28 flex items-center justify-center px-4 lg:px-6 border-b border-gray-200 flex-shrink-0">
+          <div className="flex items-center space-x-3 lg:space-x-4">
+            <div className="w-14 h-14 lg:w-20 lg:h-20 rounded-lg overflow-hidden flex-shrink-0">
               <img
                 src={zongLogo}
                 alt="Zong Logo"
                 className="w-full h-full object-contain"
               />
             </div>
-          )}
+            <div>
+              <h1 className="text-lg lg:text-2xl font-bold text-gray-800">Compliance</h1>
+              <p className="text-[10px] lg:text-xs text-gray-500">Orchestration Platform</p>
+            </div>
+          </div>
         </div>
 
-        {/* Collapse Toggle Button */}
-        <button
-          onClick={toggleCollapse}
-          className="hidden lg:flex absolute -right-3 top-24 bg-white border border-gray-200 rounded-full p-1 shadow-md hover:shadow-lg transition-shadow"
-        >
-          <svg
-            className={`h-4 w-4 text-gray-600 transition-transform duration-300 ${
-              isCollapsed ? 'rotate-180' : ''
-            }`}
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M15 19l-7-7 7-7"
-            />
-          </svg>
-        </button>
-
-        {/* Navigation */}
-        <nav className="flex-1 mt-4 md:mt-6 px-3 md:px-4 overflow-y-auto overflow-x-hidden">
+        <nav className="flex-1 mt-4 lg:mt-6 px-3 lg:px-4 overflow-y-auto">
           {navigation.map((item) => (
             <NavLink
               key={item.name}
               to={item.path}
-              onClick={() => {
-                if (window.innerWidth < 1024) {
-                  setIsMobileOpen(false);
-                }
-              }}
               className={({ isActive }) =>
-                `flex items-center px-3 py-2.5 md:px-4 md:py-3 rounded-lg mb-1 transition-all duration-200 group ${
+                `flex items-center px-3 lg:px-4 py-2.5 lg:py-3 rounded-lg mb-1 transition-colors text-sm lg:text-base ${
                   isActive
-                    ? "bg-[#8cc63e] text-white shadow-md"
+                    ? "bg-[#8cc63e] text-white"
                     : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                } ${isCollapsed ? 'justify-center' : ''}`
+                }`
               }
             >
               <svg
-                className={`flex-shrink-0 h-5 w-5 transition-colors ${
-                  isCollapsed ? 'mr-0' : 'mr-3'
-                }`}
+                className="h-4 w-4 lg:h-5 lg:w-5 mr-2 lg:mr-3 flex-shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -205,43 +99,75 @@ const Sidebar = () => {
                   d={item.icon}
                 />
               </svg>
-              
-              {!isCollapsed && (
-                <span className="text-sm md:text-base font-medium whitespace-nowrap">
-                  {item.name}
-                </span>
-              )}
-
-              {/* Tooltip for collapsed state */}
-              {isCollapsed && (
-                <div className="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity whitespace-nowrap z-50">
-                  {item.name}
-                </div>
-              )}
+              <span className="truncate">{item.name}</span>
             </NavLink>
           ))}
         </nav>
 
-        {/* Footer Section */}
-        <div className={`p-4 border-t border-gray-200 ${
-          isCollapsed ? 'text-center' : ''
-        }`}>
-          {!isCollapsed ? (
-            <div className="text-xs text-gray-400 text-center">
-              <p>Version 1.0.0</p>
-            </div>
-          ) : (
-            <div className="text-[10px] text-gray-400">
-              <p>v1.0.0</p>
-            </div>
-          )}
+        <div className="p-3 lg:p-4 border-t border-gray-200 flex-shrink-0">
+          <div className="text-[10px] lg:text-xs text-gray-400 text-center">
+            <p>Version 1.0.0</p>
+          </div>
         </div>
       </div>
 
-      {/* Push content for desktop */}
-      <div className={`hidden lg:block transition-all duration-300 ${
-        isCollapsed ? 'w-20' : 'w-64'
-      } flex-shrink-0`} />
+      {/* Mobile Bottom Navigation */}
+      <div className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-30">
+        <div className="flex justify-around items-center py-1">
+          {navigation.slice(0, 5).map((item) => (
+            <NavLink
+              key={item.name}
+              to={item.path}
+              className={({ isActive }) =>
+                `flex flex-col items-center py-1 px-2 text-[10px] ${
+                  isActive ? "text-[#8cc63e]" : "text-gray-500"
+                }`
+              }
+            >
+              <svg
+                className="h-5 w-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d={item.icon}
+                />
+              </svg>
+              <span className="mt-0.5">{item.name}</span>
+            </NavLink>
+          ))}
+          <NavLink
+            to={navigation[5]?.path || "/dashboard"}
+            className={({ isActive }) =>
+              `flex flex-col items-center py-1 px-2 text-[10px] ${
+                isActive ? "text-[#8cc63e]" : "text-gray-500"
+              }`
+            }
+          >
+            <svg
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M4 6h16M4 12h16M4 18h7"
+              />
+            </svg>
+            <span className="mt-0.5">More</span>
+          </NavLink>
+        </div>
+      </div>
+
+      {/* Spacer for mobile bottom nav */}
+      <div className="md:hidden h-14"></div>
     </>
   );
 };

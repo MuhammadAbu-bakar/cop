@@ -55,7 +55,7 @@ export const getObligationById = async (id) => {
   }
 }
 
-// Get obligation by obligation_id (MS-001 format) - FIXED: removed instances
+// Get obligation by obligation_id (MS-001 format)
 export const getObligationByObligationId = async (obligationId) => {
   try {
     const { data, error } = await supabase
@@ -138,58 +138,142 @@ export const updateObligationStatus = async (id, status, comment = '') => {
   }
 }
 
-// Get obligation instances
+// Get obligation instances - FIXED: Generate instances on the fly from obligations
 export const getObligationInstances = async (obligationId) => {
   try {
-    const { data, error } = await supabase
-      .from('obligation_instances')
+    // First get the obligation to understand its frequency
+    const { data: obligation, error: obligationError } = await supabase
+      .from('obligations')
       .select('*')
-      .eq('obligation_id', obligationId)
-      .order('due_date', { ascending: true })
+      .eq('id', obligationId)
+      .single()
 
-    if (error) throw error
-    return { data, error: null }
+    if (obligationError) throw obligationError
+    if (!obligation) return { data: [], error: null }
+
+    // Generate instances based on frequency
+    const instances = generateInstancesFromObligation(obligation)
+    
+    return { data: instances, error: null }
   } catch (error) {
     console.error('Error fetching obligation instances:', error)
     return { data: null, error }
   }
 }
 
+// Helper function to generate instances based on frequency
+const generateInstancesFromObligation = (obligation) => {
+  const instances = []
+  const today = new Date()
+  const frequencies = {
+    'Monthly': 1,
+    'Quarterly': 3,
+    'Bi-Annual': 6,
+    'Annual': 12,
+    'One-Time': 0
+  }
+
+  const monthsToGenerate = frequencies[obligation.frequency] || 1
+  const currentDate = new Date(today)
+  
+  // Generate future instances
+  for (let i = 0; i < 6; i++) { // Generate up to 6 instances
+    const dueDate = new Date(currentDate)
+    if (monthsToGenerate > 0) {
+      dueDate.setMonth(dueDate.getMonth() + (i * monthsToGenerate))
+    } else {
+      // One-time obligation - use the obligation's due_date_rule if available
+      if (obligation.due_date_rule) {
+        const parsedDate = new Date(obligation.due_date_rule)
+        if (!isNaN(parsedDate.getTime())) {
+          dueDate.setTime(parsedDate.getTime())
+        } else {
+          dueDate.setMonth(dueDate.getMonth() + 1) // Default to 1 month if no rule
+        }
+      } else {
+        dueDate.setMonth(dueDate.getMonth() + 1)
+      }
+    }
+
+    // Only add if due date is not too far in the past
+    const diffTime = dueDate - today
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+    
+    if (diffDays > -30) { // Keep instances from last 30 days
+      instances.push({
+        id: `${obligation.id}-${i}`,
+        obligation_id: obligation.id,
+        due_date: dueDate.toISOString().split('T')[0],
+        status: determineInstanceStatus(dueDate, obligation.current_status),
+        comments: '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+    }
+  }
+
+  // Sort by due date
+  instances.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
+  
+  return instances
+}
+
+// Helper function to determine instance status
+const determineInstanceStatus = (dueDate, obligationStatus) => {
+  const today = new Date()
+  const diffTime = dueDate - today
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
+
+  if (diffDays < 0) {
+    return 'Overdue'
+  } else if (diffDays === 0) {
+    return 'Pending'
+  } else if (diffDays <= 7) {
+    return 'Pending'
+  } else {
+    return 'In Progress'
+  }
+}
+
 // Update instance status
 export const updateInstanceStatus = async (instanceId, status, comment = '') => {
   try {
-    // First get the obligation_id for this instance
-    const { data: instance, error: fetchError } = await supabase
-      .from('obligation_instances')
-      .select('obligation_id')
-      .eq('id', instanceId)
+    // Parse instanceId to get obligation_id
+    const [obligationId, index] = instanceId.split('-')
+    
+    // Get the obligation
+    const { data: obligation, error: fetchError } = await supabase
+      .from('obligations')
+      .select('*')
+      .eq('id', obligationId)
       .single()
 
     if (fetchError) throw fetchError
 
-    const { data, error } = await supabase
-      .from('obligation_instances')
-      .update({ 
-        status,
-        comments: comment,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', instanceId)
-      .select()
-
-    if (error) throw error
-
-    // Add to activity history
-    if (data && data[0] && instance) {
-      await addActivityHistory(
-        instance.obligation_id,
-        data[0].id,
-        `Instance status updated to ${status}`,
-        comment
-      )
+    // Update the obligation's current_status if it's a significant status change
+    if (['Approved', 'Submitted', 'Completed'].includes(status)) {
+      await updateObligationStatus(obligationId, status, comment)
     }
 
-    return { data, error: null }
+    // Add to activity history
+    await addActivityHistory(
+      obligationId,
+      instanceId,
+      `Instance status updated to ${status}`,
+      comment
+    )
+
+    // Return a mock updated instance
+    return { 
+      data: [{ 
+        id: instanceId,
+        obligation_id: obligationId,
+        status: status,
+        comments: comment,
+        updated_at: new Date().toISOString()
+      }], 
+      error: null 
+    }
   } catch (error) {
     console.error('Error updating instance status:', error)
     return { data: null, error }
@@ -202,39 +286,39 @@ export const submitInstance = async (instanceId) => {
     const user = await supabase.auth.getUser()
     if (user.error) throw user.error
 
-    // First get the obligation_id for this instance
-    const { data: instance, error: fetchError } = await supabase
-      .from('obligation_instances')
-      .select('obligation_id')
-      .eq('id', instanceId)
+    const [obligationId, index] = instanceId.split('-')
+    
+    // Get the obligation
+    const { data: obligation, error: fetchError } = await supabase
+      .from('obligations')
+      .select('*')
+      .eq('id', obligationId)
       .single()
 
     if (fetchError) throw fetchError
 
-    const { data, error } = await supabase
-      .from('obligation_instances')
-      .update({ 
+    // Update obligation status to Submitted
+    await updateObligationStatus(obligationId, 'Submitted', 'Submitted for review')
+
+    // Add to activity history
+    await addActivityHistory(
+      obligationId,
+      instanceId,
+      'Instance submitted for review',
+      `Submitted by ${user.data.user.email}`
+    )
+
+    return { 
+      data: [{ 
+        id: instanceId,
+        obligation_id: obligationId,
         status: 'Submitted',
         submitted_by: user.data.user.id,
         submitted_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
-      })
-      .eq('id', instanceId)
-      .select()
-
-    if (error) throw error
-
-    // Add to activity history
-    if (data && data[0] && instance) {
-      await addActivityHistory(
-        instance.obligation_id,
-        data[0].id,
-        'Instance submitted for review',
-        null
-      )
+      }], 
+      error: null 
     }
-
-    return { data, error: null }
   } catch (error) {
     console.error('Error submitting instance:', error)
     return { data: null, error }
@@ -247,39 +331,39 @@ export const approveInstance = async (instanceId) => {
     const user = await supabase.auth.getUser()
     if (user.error) throw user.error
 
-    // First get the obligation_id for this instance
-    const { data: instance, error: fetchError } = await supabase
-      .from('obligation_instances')
-      .select('obligation_id')
-      .eq('id', instanceId)
+    const [obligationId, index] = instanceId.split('-')
+    
+    // Get the obligation
+    const { data: obligation, error: fetchError } = await supabase
+      .from('obligations')
+      .select('*')
+      .eq('id', obligationId)
       .single()
 
     if (fetchError) throw fetchError
 
-    const { data, error } = await supabase
-      .from('obligation_instances')
-      .update({ 
+    // Update obligation status to Approved
+    await updateObligationStatus(obligationId, 'Approved', 'Approved')
+
+    // Add to activity history
+    await addActivityHistory(
+      obligationId,
+      instanceId,
+      'Instance approved',
+      `Approved by ${user.data.user.email}`
+    )
+
+    return { 
+      data: [{ 
+        id: instanceId,
+        obligation_id: obligationId,
         status: 'Approved',
         approved_by: user.data.user.id,
         approved_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
-      })
-      .eq('id', instanceId)
-      .select()
-
-    if (error) throw error
-
-    // Add to activity history
-    if (data && data[0] && instance) {
-      await addActivityHistory(
-        instance.obligation_id,
-        data[0].id,
-        'Instance approved',
-        null
-      )
+      }], 
+      error: null 
     }
-
-    return { data, error: null }
   } catch (error) {
     console.error('Error approving instance:', error)
     return { data: null, error }
@@ -515,26 +599,49 @@ export const getComplianceByDomain = async () => {
   }
 }
 
-// Get upcoming deadlines
+// Get upcoming deadlines - FIXED: Now uses obligations table directly
 export const getUpcomingDeadlines = async () => {
   try {
+    // Generate instances for all obligations
+    const { data: obligations, error } = await supabase
+      .from('obligations')
+      .select('*')
+    
+    if (error) throw error
+    if (!obligations || obligations.length === 0) return []
+
+    let allInstances = []
+    
+    // Generate instances for each obligation
+    for (const obligation of obligations) {
+      const instances = generateInstancesFromObligation(obligation)
+      // Add obligation details to each instance
+      const instancesWithObligation = instances.map(instance => ({
+        ...instance,
+        obligation: {
+          id: obligation.id,
+          name: obligation.name,
+          obligation_id: obligation.obligation_id,
+          domain: obligation.domain
+        }
+      }))
+      allInstances = [...allInstances, ...instancesWithObligation]
+    }
+
+    // Filter for upcoming deadlines (next 30 days)
     const today = new Date()
     const nextMonth = new Date(today)
     nextMonth.setMonth(nextMonth.getMonth() + 1)
 
-    const { data, error } = await supabase
-      .from('obligation_instances')
-      .select(`
-        *,
-        obligation:obligations(name, obligation_id, domain)
-      `)
-      .gte('due_date', today.toISOString().split('T')[0])
-      .lte('due_date', nextMonth.toISOString().split('T')[0])
-      .order('due_date', { ascending: true })
-      .limit(10)
+    const upcoming = allInstances.filter(instance => {
+      const dueDate = new Date(instance.due_date)
+      return dueDate >= today && dueDate <= nextMonth
+    })
 
-    if (error) throw error
-    return data || []
+    // Sort by due date and limit to 10
+    upcoming.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
+    
+    return upcoming.slice(0, 10)
   } catch (error) {
     console.error('Error fetching upcoming deadlines:', error)
     return []

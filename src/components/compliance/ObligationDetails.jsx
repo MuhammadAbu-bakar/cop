@@ -15,10 +15,8 @@ const ObligationDetails = () => {
   const obligationId = id; // Rename for clarity
   const navigate = useNavigate();
   const { profile } = useAuth();
-  const fileInputRef = useRef(null); // Create a ref for the file input
-
-  console.log("All params:", { id });
-  console.log("Obligation ID from URL:", obligationId);
+  const fileInputRef = useRef(null);
+  const templateFileInputRef = useRef(null);
 
   const [obligation, setObligation] = useState(null);
   const [instances, setInstances] = useState([]);
@@ -30,6 +28,10 @@ const ObligationDetails = () => {
   const [selectedFile, setSelectedFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [templates, setTemplates] = useState([]);
+  const [templateLoading, setTemplateLoading] = useState(false);
+  const [templateUploading, setTemplateUploading] = useState(false);
+  const [templateUploadError, setTemplateUploadError] = useState("");
 
   useEffect(() => {
     if (obligationId) {
@@ -42,6 +44,12 @@ const ObligationDetails = () => {
       setLoading(false);
     }
   }, [obligationId]);
+
+  useEffect(() => {
+    if (obligation) {
+      fetchTemplates();
+    }
+  }, [obligation]);
 
   const fetchObligationDetails = async () => {
     setLoading(true);
@@ -128,6 +136,130 @@ const ObligationDetails = () => {
       setError("An unexpected error occurred: " + error.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const fetchTemplates = async () => {
+    if (!obligation) return;
+    
+    setTemplateLoading(true);
+    try {
+      // Use bucket "template" with folder structure
+      const folderPath = `obligations/${obligation.obligation_id}/templates/`;
+      
+      const { data, error } = await supabase.storage
+        .from("template")
+        .list(folderPath);
+
+      if (error) {
+        console.error("Error fetching templates:", error);
+        setTemplates([]);
+        return;
+      }
+
+      // Filter out folders and get only files
+      const files = data.filter(item => !item.id.endsWith('/'));
+      
+      // Get public URLs for each file
+      const templatesWithUrls = await Promise.all(
+        files.map(async (file) => {
+          const { data: urlData } = supabase.storage
+            .from("template")
+            .getPublicUrl(`${folderPath}${file.name}`);
+          
+          return {
+            ...file,
+            url: urlData.publicUrl,
+            fullPath: `${folderPath}${file.name}`
+          };
+        })
+      );
+
+      setTemplates(templatesWithUrls);
+    } catch (error) {
+      console.error("Error fetching templates:", error);
+      setTemplates([]);
+    } finally {
+      setTemplateLoading(false);
+    }
+  };
+
+  const handleTemplateUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !obligation) return;
+
+    setTemplateUploadError("");
+    setTemplateUploading(true);
+
+    try {
+      // Create folder path for this obligation's templates
+      const folderPath = `obligations/${obligation.obligation_id}/templates/`;
+      const filePath = `${folderPath}${file.name}`;
+
+      // Upload file to template bucket
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("template")
+        .upload(filePath, file, {
+          cacheControl: "3600",
+          upsert: true, // Overwrite if exists
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Refresh templates list
+      await fetchTemplates();
+
+      // Reset file input
+      if (templateFileInputRef.current) {
+        templateFileInputRef.current.value = "";
+      }
+
+      alert(`Template "${file.name}" uploaded successfully!`);
+    } catch (error) {
+      console.error("Error uploading template:", error);
+      setTemplateUploadError(error.message || "Failed to upload template");
+    } finally {
+      setTemplateUploading(false);
+    }
+  };
+
+  const handleTemplateDownload = async (template) => {
+    try {
+      // Download the file from template bucket
+      const response = await fetch(template.url);
+      const blob = await response.blob();
+      
+      // Create download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = template.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Error downloading template:", error);
+      alert("Failed to download template. Please try again.");
+    }
+  };
+
+  const handleTemplateDelete = async (template) => {
+    if (!confirm(`Are you sure you want to delete "${template.name}"?`)) return;
+
+    try {
+      const { error } = await supabase.storage
+        .from("template")
+        .remove([template.fullPath]);
+
+      if (error) throw error;
+
+      // Refresh templates list
+      await fetchTemplates();
+      alert(`Template "${template.name}" deleted successfully!`);
+    } catch (error) {
+      console.error("Error deleting template:", error);
+      alert("Failed to delete template. Please try again.");
     }
   };
 
@@ -489,6 +621,14 @@ const ObligationDetails = () => {
       hour: "2-digit",
       minute: "2-digit",
     });
+  };
+
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return "0 Bytes";
+    const k = 1024;
+    const sizes = ["Bytes", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
   console.log("Current state:", {
@@ -1010,26 +1150,154 @@ const ObligationDetails = () => {
             </div>
           </div>
 
-          {/* Quick Stats */}
+          {/* Evidence Templates - Using bucket "template" */}
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-              Quick Stats
+              Evidence Templates
             </h3>
-            <div className="space-y-2 sm:space-y-3">
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-gray-500">Total Evidence</span>
-                <span className="font-medium text-gray-900">{evidence.length}</span>
+            <div className="space-y-4">
+              {/* Upload Template */}
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
+                <svg
+                  className="h-8 w-8 text-gray-400 mx-auto"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                  />
+                </svg>
+                <p className="mt-1 text-xs sm:text-sm text-gray-600">
+                  Upload template file
+                </p>
+                <input
+                  ref={templateFileInputRef}
+                  type="file"
+                  onChange={handleTemplateUpload}
+                  disabled={templateUploading}
+                  className="mt-2 block w-full text-xs sm:text-sm text-gray-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
+                />
+                {templateUploadError && (
+                  <div className="mt-2 text-xs text-red-600 break-words">
+                    {templateUploadError}
+                  </div>
+                )}
+                {templateUploading && (
+                  <div className="mt-2 text-xs text-gray-500">
+                    <svg
+                      className="animate-spin h-4 w-4 inline mr-2"
+                      xmlns="http://www.w3.org/2000/svg"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                    >
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"
+                      ></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                      ></path>
+                    </svg>
+                    Uploading...
+                  </div>
+                )}
               </div>
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-gray-500">Total Instances</span>
-                <span className="font-medium text-gray-900">{instances.length}</span>
-              </div>
-              <div className="flex justify-between text-xs sm:text-sm">
-                <span className="text-gray-500">Completed Instances</span>
-                <span className="font-medium text-gray-900">
-                  {instances.filter((i) => i.status === "Completed" || i.status === "Approved").length}
-                </span>
-              </div>
+
+              {/* Templates List */}
+              {templateLoading ? (
+                <div className="text-center py-4">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#8cc63e] mx-auto"></div>
+                  <p className="mt-2 text-xs text-gray-500">Loading templates...</p>
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="text-center py-4">
+                  <p className="text-xs sm:text-sm text-gray-500">
+                    No templates available
+                  </p>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    Upload a template file to get started
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {templates.map((template) => (
+                    <div
+                      key={template.id}
+                      className="bg-gray-50 p-3 rounded-lg hover:bg-gray-100 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-xs sm:text-sm font-medium text-gray-900 truncate">
+                            {template.name}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            {template.metadata?.size && (
+                              <span className="text-[10px] text-gray-500">
+                                {formatFileSize(template.metadata.size)}
+                              </span>
+                            )}
+                            {template.updated_at && (
+                              <span className="text-[10px] text-gray-500">
+                                Updated: {formatDate(template.updated_at)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <button
+                            onClick={() => handleTemplateDownload(template)}
+                            className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                            title="Download template"
+                          >
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="2"
+                                d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                              />
+                            </svg>
+                          </button>
+                          <button
+                            onClick={() => handleTemplateDelete(template)}
+                            className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                            title="Delete template"
+                          >
+                            <svg
+                              className="h-4 w-4"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth="2"
+                                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                              />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>

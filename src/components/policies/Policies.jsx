@@ -237,7 +237,7 @@ const Policies = () => {
     if (fileType?.includes("pdf")) {
       return (
         <svg
-          className="h-6 w-6 sm:h-7 sm:w-7 md:h-8 md:w-8 text-red-500 flex-shrink-0"
+          className="h-8 w-8 text-red-500 flex-shrink-0"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -253,7 +253,7 @@ const Policies = () => {
     } else if (fileType?.includes("word") || fileType?.includes("document")) {
       return (
         <svg
-          className="h-6 w-6 sm:h-7 sm:w-7 md:h-8 md:w-8 text-blue-500 flex-shrink-0"
+          className="h-8 w-8 text-blue-500 flex-shrink-0"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -269,7 +269,7 @@ const Policies = () => {
     } else {
       return (
         <svg
-          className="h-6 w-6 sm:h-7 sm:w-7 md:h-8 md:w-8 text-gray-500 flex-shrink-0"
+          className="h-8 w-8 text-gray-500 flex-shrink-0"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -287,25 +287,22 @@ const Policies = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-[60vh] sm:min-h-screen">
-        <div className="text-center px-4">
-          <div className="animate-spin rounded-full h-10 w-10 sm:h-12 sm:w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
-          <p className="mt-3 sm:mt-4 text-sm sm:text-base text-gray-600">Loading policies...</p>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading policies...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-6 pb-6 sm:pb-8">
-      {/* Header Section */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-xl sm:text-2xl md:text-3xl font-bold text-gray-900">
-            Policies
-          </h1>
-          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">
-            {filteredPolicies.length} {filteredPolicies.length === 1 ? 'policy' : 'policies'} found
+          <h1 className="text-2xl font-bold text-gray-900">Policies</h1>
+          <p className="text-sm text-gray-500 mt-1">
+            {filteredPolicies.length} policies found
           </p>
         </div>
         {isAdmin && (
@@ -315,10 +312,10 @@ const Policies = () => {
               setUploadError("");
               setUploadSuccess("");
             }}
-            className="bg-[#8cc63e] text-white px-3 sm:px-4 py-2 sm:py-2.5 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center justify-center text-sm sm:text-base w-full sm:w-auto"
+            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
           >
             <svg
-              className="h-4 w-4 sm:h-5 sm:w-5 mr-1.5 sm:mr-2"
+              className="h-5 w-5 mr-2"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -336,17 +333,17 @@ const Policies = () => {
       </div>
 
       {/* Search Bar */}
-      <div className="bg-white rounded-lg shadow p-3 sm:p-4">
+      <div className="bg-white rounded-lg shadow p-4">
         <div className="relative">
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search policies by title, description, or file name..."
-            className="w-full px-3 py-2 sm:py-2.5 pl-9 sm:pl-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent text-sm sm:text-base"
+            className="w-full px-3 py-2 pl-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
           />
           <svg
-            className="absolute left-3 top-2.5 sm:top-3 h-4 w-4 sm:h-5 sm:w-5 text-gray-400"
+            className="absolute left-3 top-2.5 h-5 w-5 text-gray-400"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -358,81 +355,58 @@ const Policies = () => {
               d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
             />
           </svg>
-          {searchTerm && (
-            <button
-              onClick={() => setSearchTerm("")}
-              className="absolute right-3 top-2.5 sm:top-3 text-gray-400 hover:text-gray-600"
-            >
-              <svg
-                className="h-4 w-4 sm:h-5 sm:w-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth="2"
-                  d="M6 18L18 6M6 6l12 12"
-                />
-              </svg>
-            </button>
-          )}
         </div>
       </div>
 
-      {/* Policies List */}
+      {/* Policies List - Full Row Format */}
       {filteredPolicies.length > 0 ? (
-        <div className="space-y-3 sm:space-y-4">
+        <div className="space-y-3">
           {filteredPolicies.map((policy) => (
             <div
               key={policy.id}
-              className="bg-white rounded-lg shadow hover:shadow-md transition-shadow p-3 sm:p-4 md:p-6"
+              className="bg-white rounded-lg shadow hover:shadow-md transition-shadow p-4 sm:p-6"
             >
               <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
-                {/* Icon and Info */}
-                <div className="flex items-start sm:items-center flex-1 min-w-0 space-x-2 sm:space-x-3 md:space-x-4">
-                  <div className="p-1.5 sm:p-2 md:p-3 bg-gray-100 rounded-lg flex-shrink-0">
+                {/* Left side - Icon and Info */}
+                <div className="flex items-start sm:items-center flex-1 min-w-0 space-x-3 sm:space-x-4">
+                  <div className="p-2 sm:p-3 bg-gray-100 rounded-lg flex-shrink-0">
                     {getFileIcon(policy.file_type)}
                   </div>
-                  
                   <div className="flex-1 min-w-0">
-                    <h3 className="text-sm sm:text-base md:text-lg font-medium text-gray-900 break-words">
+                    <h3 className="text-sm sm:text-base font-medium text-gray-900 break-words">
                       {policy.title}
                     </h3>
-                    
                     {policy.description && (
-                      <p className="text-xs sm:text-sm text-gray-500 break-words mt-0.5 sm:mt-1">
+                      <p className="text-xs sm:text-sm text-gray-500 break-words mt-0.5">
                         {policy.description}
                       </p>
                     )}
-                    
-                    <div className="flex flex-wrap items-center gap-1 sm:gap-2 md:gap-3 mt-1 sm:mt-1.5">
-                      <span className="text-[10px] sm:text-xs text-gray-400 truncate max-w-[120px] sm:max-w-none">
-                        {policy.file_name}
+                    <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-1.5">
+                      <span className="text-[10px] sm:text-xs text-gray-400">
+                        File: {policy.file_name}
                       </span>
-                      <span className="hidden xs:inline text-gray-300">•</span>
+                      <span className="hidden sm:inline text-gray-300">|</span>
                       <span className="text-[10px] sm:text-xs text-gray-400">
                         {formatFileSize(policy.file_size)}
                       </span>
-                      <span className="hidden sm:inline text-gray-300">•</span>
-                      <span className="text-[10px] sm:text-xs text-gray-400 truncate">
-                        {formatDate(policy.uploaded_at)}
+                      <span className="hidden sm:inline text-gray-300">|</span>
+                      <span className="text-[10px] sm:text-xs text-gray-400">
+                        Uploaded: {formatDate(policy.uploaded_at)}
                       </span>
                     </div>
                   </div>
                 </div>
 
-                {/* Actions */}
-                <div className="flex items-center gap-1.5 sm:gap-2 md:gap-3 flex-shrink-0 self-start sm:self-center">
+                {/* Right side - Actions */}
+                <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                   <a
                     href={policy.file_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 bg-[#8cc63e] text-white text-[10px] sm:text-xs md:text-sm rounded-md hover:bg-[#7ab83a] transition-colors flex items-center whitespace-nowrap"
+                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-[#8cc63e] text-white text-xs sm:text-sm rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
                   >
                     <svg
-                      className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 mr-0.5 sm:mr-1"
+                      className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -450,16 +424,15 @@ const Policies = () => {
                         d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                       />
                     </svg>
-                    <span className="hidden xs:inline">View</span>
+                    View
                   </a>
-                  
                   <a
                     href={policy.file_url}
                     download
-                    className="px-2.5 sm:px-3 md:px-4 py-1.5 sm:py-2 bg-gray-200 text-gray-700 text-[10px] sm:text-xs md:text-sm rounded-md hover:bg-gray-300 transition-colors flex items-center whitespace-nowrap"
+                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-gray-200 text-gray-700 text-xs sm:text-sm rounded-md hover:bg-gray-300 transition-colors flex items-center"
                   >
                     <svg
-                      className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 mr-0.5 sm:mr-1"
+                      className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
                       fill="none"
                       stroke="currentColor"
                       viewBox="0 0 24 24"
@@ -471,9 +444,8 @@ const Policies = () => {
                         d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                       />
                     </svg>
-                    <span className="hidden xs:inline">Download</span>
+                    Download
                   </a>
-                  
                   {isAdmin && (
                     <button
                       onClick={() => handleDelete(policy.id)}
@@ -482,7 +454,7 @@ const Policies = () => {
                       title="Delete policy"
                     >
                       <svg
-                        className="h-4 w-4 sm:h-4.5 sm:w-4.5 md:h-5 md:w-5"
+                        className="h-4 w-4 sm:h-5 sm:w-5"
                         fill="none"
                         stroke="currentColor"
                         viewBox="0 0 24 24"
@@ -502,9 +474,9 @@ const Policies = () => {
           ))}
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow p-8 sm:p-12 md:p-16 text-center">
+        <div className="bg-white rounded-lg shadow p-12 text-center">
           <svg
-            className="h-12 w-12 sm:h-14 sm:w-14 md:h-16 md:w-16 text-gray-400 mx-auto mb-3 sm:mb-4"
+            className="h-16 w-16 text-gray-400 mx-auto mb-4"
             fill="none"
             stroke="currentColor"
             viewBox="0 0 24 24"
@@ -516,10 +488,10 @@ const Policies = () => {
               d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
             />
           </svg>
-          <h3 className="text-base sm:text-lg md:text-xl font-medium text-gray-900">
+          <h3 className="text-lg font-medium text-gray-900">
             {searchTerm ? "No policies match your search" : "No policies uploaded"}
           </h3>
-          <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-gray-500">
+          <p className="mt-2 text-sm text-gray-500">
             {searchTerm
               ? `No policies found matching "${searchTerm}"`
               : isAdmin
@@ -529,7 +501,7 @@ const Policies = () => {
           {isAdmin && !searchTerm && (
             <button
               onClick={() => setShowUploadModal(true)}
-              className="mt-4 bg-[#8cc63e] text-white px-4 sm:px-6 py-2 sm:py-2.5 rounded-md hover:bg-[#7ab83a] transition-colors text-sm sm:text-base"
+              className="mt-4 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors"
             >
               Upload Policy
             </button>
@@ -537,12 +509,12 @@ const Policies = () => {
         </div>
       )}
 
-      {/* Upload Modal */}
+      {/* Upload Modal - Only for Admin */}
       {showUploadModal && isAdmin && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-3 sm:p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[95vh] sm:max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center">
-              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900">
                 Upload Policy Document
               </h3>
               <button
@@ -551,10 +523,10 @@ const Policies = () => {
                   setUploadError("");
                   setUploadSuccess("");
                 }}
-                className="text-gray-400 hover:text-gray-600 p-1"
+                className="text-gray-400 hover:text-gray-600"
               >
                 <svg
-                  className="h-5 w-5 sm:h-6 sm:w-6"
+                  className="h-6 w-6"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -569,14 +541,14 @@ const Policies = () => {
               </button>
             </div>
 
-            <div className="p-4 sm:p-6 space-y-4">
+            <div className="p-6 space-y-4">
               {uploadError && (
-                <div className="p-2.5 sm:p-3 bg-red-50 text-red-700 border border-red-200 rounded-md text-sm">
+                <div className="p-3 bg-red-50 text-red-700 border border-red-200 rounded-md">
                   {uploadError}
                 </div>
               )}
               {uploadSuccess && (
-                <div className="p-2.5 sm:p-3 bg-green-50 text-green-700 border border-green-200 rounded-md text-sm">
+                <div className="p-3 bg-green-50 text-green-700 border border-green-200 rounded-md">
                   {uploadSuccess}
                 </div>
               )}
@@ -590,7 +562,7 @@ const Policies = () => {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Enter policy title"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] text-sm sm:text-base"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                 />
               </div>
 
@@ -603,7 +575,7 @@ const Policies = () => {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Enter policy description (optional)"
                   rows="3"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] text-sm sm:text-base"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                 />
               </div>
 
@@ -616,23 +588,23 @@ const Policies = () => {
                   type="file"
                   onChange={handleFileSelect}
                   accept=".pdf,.doc,.docx,.txt"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] text-sm file:mr-3 sm:file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-md file:border-0 file:text-xs sm:file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
                 />
-                <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
+                <p className="text-xs text-gray-500 mt-1">
                   Accepted formats: PDF, Word, Text (Max 10MB)
                 </p>
                 {selectedFile && (
-                  <p className="text-xs sm:text-sm text-[#8cc63e] mt-2 break-words">
+                  <p className="text-sm text-[#8cc63e] mt-2">
                     Selected: {selectedFile.name} ({formatFileSize(selectedFile.size)})
                   </p>
                 )}
               </div>
 
-              <div className="flex flex-col xs:flex-row gap-2 sm:gap-3 pt-2 sm:pt-4">
+              <div className="flex space-x-3 pt-4">
                 <button
                   onClick={handleUpload}
                   disabled={uploading}
-                  className="flex-1 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base order-2 xs:order-1"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {uploading ? (
                     <>
@@ -668,7 +640,7 @@ const Policies = () => {
                     setUploadError("");
                     setUploadSuccess("");
                   }}
-                  className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm sm:text-base order-1 xs:order-2"
+                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
                 >
                   Cancel
                 </button>
