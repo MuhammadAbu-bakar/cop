@@ -33,7 +33,10 @@ const ComplianceStats = ({ stats }) => {
 
     return (
       <div className="relative inline-flex items-center justify-start w-full">
-        <svg className="w-full max-w-[90px] sm:max-w-[110px] md:max-w-[130px] h-14 sm:h-16 md:h-20 mx-auto" viewBox="0 0 120 65">
+        <svg 
+          className="w-full max-w-[70px] xs:max-w-[80px] sm:max-w-[90px] md:max-w-[110px] lg:max-w-[130px] h-12 xs:h-14 sm:h-16 md:h-18 lg:h-20 mx-auto" 
+          viewBox="0 0 120 65"
+        >
           {/* Background arc - half circle from left to right */}
           <path
             d="M 20 50 A 40 40 0 0 1 100 50"
@@ -60,7 +63,7 @@ const ComplianceStats = ({ stats }) => {
             x="60"
             y="44"
             textAnchor="middle"
-            className="text-lg sm:text-xl md:text-2xl font-bold"
+            className="text-base xs:text-lg sm:text-xl md:text-2xl font-bold"
             fill={color}
           >
             {percentage}%
@@ -69,7 +72,7 @@ const ComplianceStats = ({ stats }) => {
             x="60"
             y="56"
             textAnchor="middle"
-            className="text-[7px] sm:text-[8px] md:text-[10px]"
+            className="text-[6px] xs:text-[7px] sm:text-[8px] md:text-[9px] lg:text-[10px]"
             fill="#9ca3af"
           >
             Compliance
@@ -142,11 +145,11 @@ const ComplianceStats = ({ stats }) => {
   };
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3 sm:gap-4">
       {statCards.map((stat, index) => (
         <div
           key={index}
-          className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow border-l-4 flex flex-col h-full"
+          className="bg-white rounded-lg shadow hover:shadow-lg transition-all duration-300 border-l-4 flex flex-col h-full hover:scale-[1.01]"
           style={{
             borderLeftColor: getBorderColor(stat.color),
           }}
@@ -156,13 +159,13 @@ const ComplianceStats = ({ stats }) => {
               <div className="flex items-center justify-between flex-1">
                 {/* Left side - Text content for regular cards */}
                 <div className="flex-1 min-w-0 pr-2">
-                  <p className="text-[10px] sm:text-xs text-gray-500 font-medium whitespace-normal break-words">
+                  <p className="text-[10px] xs:text-[11px] sm:text-xs text-gray-500 font-medium whitespace-normal break-words">
                     {stat.title}
                   </p>
-                  <p className="text-lg sm:text-xl md:text-2xl font-bold text-gray-900 leading-tight mt-3 sm:mt-4">
+                  <p className="text-lg sm:text-xl md:text-2xl lg:text-3xl font-bold text-gray-900 leading-tight mt-2 sm:mt-3 md:mt-4">
                     {stat.value}
                   </p>
-                  <p className="text-[8px] sm:text-[10px] text-gray-500 mt-3 sm:mt-4 whitespace-normal break-words">
+                  <p className="text-[8px] xs:text-[9px] sm:text-[10px] text-gray-500 mt-2 sm:mt-3 md:mt-4 whitespace-normal break-words">
                     {stat.subtitle}
                   </p>
                 </div>
@@ -171,7 +174,7 @@ const ComplianceStats = ({ stats }) => {
                   className={`flex-shrink-0 p-1.5 sm:p-2 md:p-2.5 rounded-full ${getColorClasses(stat.color)}`}
                 >
                   <svg
-                    className="h-3.5 w-3.5 sm:h-4 sm:w-4 md:h-5 md:w-5"
+                    className="h-3.5 w-3.5 sm:h-4 sm:w-4 md:h-5 md:w-5 lg:h-6 lg:w-6"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -188,7 +191,7 @@ const ComplianceStats = ({ stats }) => {
             ) : (
               <div className="flex flex-col items-center flex-1 justify-center">
                 {/* Title */}
-                <p className="text-[10px] sm:text-xs text-gray-500 font-medium text-center w-full whitespace-normal break-words">
+                <p className="text-[10px] xs:text-[11px] sm:text-xs text-gray-500 font-medium text-center w-full whitespace-normal break-words">
                   {stat.title}
                 </p>
 
@@ -198,7 +201,7 @@ const ComplianceStats = ({ stats }) => {
                 </div>
 
                 {/* Subtitle */}
-                <p className="text-[8px] sm:text-[10px] text-gray-500 text-center w-full whitespace-normal break-words">
+                <p className="text-[8px] xs:text-[9px] sm:text-[10px] text-gray-500 text-center w-full whitespace-normal break-words">
                   {stat.subtitle}
                 </p>
               </div>
