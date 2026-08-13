@@ -1,4 +1,8 @@
+import { useNavigate } from "react-router-dom";
+
 const ComplianceStats = ({ stats }) => {
+  const navigate = useNavigate();
+
   const calculatePercentage = (completed, total) => {
     if (total === 0) return 0;
     return Math.round((completed / total) * 100);
@@ -8,6 +12,19 @@ const ComplianceStats = ({ stats }) => {
     stats.completed || 0,
     stats.totalObligations || 0,
   );
+
+  // Handle card click to navigate with filter
+  const handleCardClick = (filterType, filterValue) => {
+    const params = new URLSearchParams();
+    
+    if (filterType === 'status') {
+      params.set('status', filterValue);
+    } else if (filterType === 'all') {
+      // No filters - just go to compliance
+    }
+    
+    navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`);
+  };
 
   const HalfSpeedometer = ({ percentage }) => {
     const radius = 35;
@@ -78,6 +95,8 @@ const ComplianceStats = ({ stats }) => {
       color: "purple",
       isSpeedometer: true,
       percentage: overallCompliance,
+      filterType: "all",
+      filterValue: null,
     },
     {
       title: "Total Obligations",
@@ -85,6 +104,8 @@ const ComplianceStats = ({ stats }) => {
       subtitle: `${stats.completed || 0} completed • ${stats.inProgress || stats.notStarted || 0} in progress`,
       icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
       color: "blue",
+      filterType: "all",
+      filterValue: null,
     },
     {
       title: "Completed",
@@ -92,6 +113,8 @@ const ComplianceStats = ({ stats }) => {
       subtitle: `${calculatePercentage(stats.completed, stats.totalObligations)}% of total`,
       icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
       color: "green",
+      filterType: "status",
+      filterValue: "Completed",
     },
     {
       title: "In Progress",
@@ -99,6 +122,8 @@ const ComplianceStats = ({ stats }) => {
       subtitle: `${calculatePercentage(stats.inProgress || stats.notStarted || 0, stats.totalObligations)}% of total`,
       icon: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
       color: "gray",
+      filterType: "status",
+      filterValue: "In Progress",
     },
     {
       title: "Overdue",
@@ -106,6 +131,8 @@ const ComplianceStats = ({ stats }) => {
       subtitle: `${stats.pending || 0} pending overall`,
       icon: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
       color: "red",
+      filterType: "status",
+      filterValue: "Overdue",
     },
   ];
 
@@ -133,14 +160,27 @@ const ComplianceStats = ({ stats }) => {
     return colors[color] || "#8cc63e";
   };
 
+  const getCursorClass = (filterType) => {
+    return filterType ? "cursor-pointer hover:shadow-xl transition-all duration-200" : "cursor-default";
+  };
+
   return (
     <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 gap-2 sm:gap-3 md:gap-4">
       {statCards.map((stat, index) => (
         <div
           key={index}
-          className="bg-white rounded-lg shadow hover:shadow-lg transition-shadow border-l-4 flex flex-col h-full"
+          onClick={() => stat.filterType && handleCardClick(stat.filterType, stat.filterValue)}
+          className={`bg-white rounded-lg shadow hover:shadow-lg transition-all border-l-4 flex flex-col h-full ${getCursorClass(stat.filterType)}`}
           style={{
             borderLeftColor: getBorderColor(stat.color),
+          }}
+          role={stat.filterType ? "button" : "presentation"}
+          tabIndex={stat.filterType ? 0 : -1}
+          onKeyDown={(e) => {
+            if (stat.filterType && (e.key === 'Enter' || e.key === ' ')) {
+              e.preventDefault();
+              handleCardClick(stat.filterType, stat.filterValue);
+            }
           }}
         >
           <div className="p-2 sm:p-3 md:p-4 lg:p-5 flex-1 flex flex-col">

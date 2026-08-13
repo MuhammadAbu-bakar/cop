@@ -1,11 +1,12 @@
 import { useState, useEffect } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useLocation } from "react-router-dom";
 import { getObligations } from "../../api/compliance";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
 
 const ComplianceRegister = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   
@@ -74,6 +75,16 @@ const ComplianceRegister = () => {
 
   // Policies state for dropdown
   const [policies, setPolicies] = useState([]);
+
+  // Parse URL parameters on mount and when location changes
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const statusParam = params.get('status');
+    
+    if (statusParam) {
+      setFilterStatus(statusParam);
+    }
+  }, [location.search]);
 
   useEffect(() => {
     fetchObligations();
@@ -519,6 +530,16 @@ const ComplianceRegister = () => {
     }
   };
 
+  // Clear filters function
+  const clearFilters = () => {
+    setSearchTerm("");
+    setFilterStatus("all");
+    setFilterFrequency("all");
+    setFilterDomain("all");
+    // Remove URL parameters
+    navigate('/compliance', { replace: true });
+  };
+
   const filteredObligations = obligations.filter((obligation) => {
     const matchesSearch =
       obligation.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -552,19 +573,32 @@ const ComplianceRegister = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">
             Compliance Register
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {filteredObligations.length} obligations found
+            {filterStatus !== "all" && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                  Filtered by: {filterStatus}
+                </span>
+                <button
+                  onClick={clearFilters}
+                  className="ml-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
           </p>
         </div>
         {isAdmin && (
           <button
             onClick={handleAddClick}
-            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
+            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center w-full sm:w-auto justify-center"
           >
             <svg
               className="h-5 w-5 mr-2"
@@ -599,7 +633,17 @@ const ComplianceRegister = () => {
           <div>
             <select
               value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
+              onChange={(e) => {
+                setFilterStatus(e.target.value);
+                // Update URL when status changes
+                const params = new URLSearchParams(location.search);
+                if (e.target.value === "all") {
+                  params.delete('status');
+                } else {
+                  params.set('status', e.target.value);
+                }
+                navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+              }}
               className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               <option value="all">All Statuses</option>

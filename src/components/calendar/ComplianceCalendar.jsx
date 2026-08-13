@@ -24,10 +24,10 @@ const ComplianceCalendar = () => {
 
       // Fetch instances for all obligations
       let allInstancesData = [];
-      if (obligationsData) {
+      if (obligationsData && obligationsData.length > 0) {
         for (const obligation of obligationsData) {
           const { data: instances } = await getObligationInstances(obligation.id);
-          if (instances) {
+          if (instances && instances.length > 0) {
             const instancesWithObligation = instances.map(instance => ({
               ...instance,
               obligation: {
@@ -94,6 +94,15 @@ const ComplianceCalendar = () => {
     setSelectedObligations(dayObligations);
   };
 
+  // Helper function to format date consistently
+  const formatDate = (date) => {
+    const d = new Date(date);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  };
+
   const renderMonthView = () => {
     const { daysInMonth, firstDayOfMonth } = getDaysInMonth(currentDate);
     const days = [];
@@ -108,9 +117,13 @@ const ComplianceCalendar = () => {
     // Days of the month
     for (let day = 1; day <= daysInMonth; day++) {
       const dateStr = `${year}-${String(currentDate.getMonth() + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-      const dayObligations = allInstances.filter(
-        (inst) => inst.due_date === dateStr
-      );
+      
+      // Filter obligations for this specific date using proper date comparison
+      const dayObligations = allInstances.filter((inst) => {
+        if (!inst.due_date) return false;
+        const formattedDueDate = formatDate(inst.due_date);
+        return formattedDueDate === dateStr;
+      });
 
       // Check if today
       const today = new Date();
@@ -219,6 +232,7 @@ const ComplianceCalendar = () => {
 
     // Get obligations for this quarter
     const quarterObligations = allInstances.filter((inst) => {
+      if (!inst.due_date) return false;
       const instDate = new Date(inst.due_date);
       const instMonth = instDate.getMonth();
       const instYear = instDate.getFullYear();
@@ -227,8 +241,8 @@ const ComplianceCalendar = () => {
 
     // Group by month
     const groupedByMonth = {};
-    monthIndices.forEach((monthIdx) => {
-      const monthName = quarterMonths[quarter][monthIdx % 3];
+    monthIndices.forEach((monthIdx, index) => {
+      const monthName = quarterMonths[quarter][index];
       groupedByMonth[monthName] = quarterObligations.filter((inst) => {
         const instDate = new Date(inst.due_date);
         return instDate.getMonth() === monthIdx;
@@ -333,6 +347,7 @@ const ComplianceCalendar = () => {
 
     // Get obligations for this year
     const yearObligations = allInstances.filter((inst) => {
+      if (!inst.due_date) return false;
       const instDate = new Date(inst.due_date);
       return instDate.getFullYear() === year;
     });

@@ -11,7 +11,7 @@ import Dashboard from "./components/dashboard/Dashboard";
 import Layout from "./components/common/Layout";
 import ComplianceRegister from "./components/compliance/ComplianceRegister";
 import ObligationDetails from "./components/compliance/ObligationDetails";
-import EvidenceRepository from "./components/evidence/EvidenceRepository";
+
 import ComplianceCalendar from "./components/calendar/ComplianceCalendar";
 import Reports from "./components/reports/Reports";
 import AdminPanel from "./components/admin/AdminPanel";
@@ -39,7 +39,7 @@ function App() {
             <Route path="dashboard" element={<Dashboard />} />
             <Route path="compliance" element={<ComplianceRegister />} />
             <Route path="compliance/:id" element={<ObligationDetails />} />
-            <Route path="evidence" element={<EvidenceRepository />} />
+            
             <Route path="calendar" element={<ComplianceCalendar />} />
             <Route path="reports" element={<Reports />} />
             <Route path="policies" element={<Policies />} />
