@@ -16,6 +16,7 @@ const ComplianceRegister = () => {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterFrequency, setFilterFrequency] = useState("all");
   const [filterDomain, setFilterDomain] = useState("all");
+  const [hoveredObligation, setHoveredObligation] = useState(null);
 
   // Add Modal States
   const [showAddModal, setShowAddModal] = useState(false);
@@ -690,6 +691,9 @@ const ComplianceRegister = () => {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Actions
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   ID
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -710,9 +714,6 @@ const ComplianceRegister = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Weight
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
@@ -724,20 +725,124 @@ const ComplianceRegister = () => {
                 return (
                   <tr
                     key={obligation.id}
-                    className="hover:bg-gray-50 transition-colors"
+                    className="hover:bg-gray-50 transition-colors relative"
+                    onMouseEnter={() => setHoveredObligation(obligation.id)}
+                    onMouseLeave={() => setHoveredObligation(null)}
                   >
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center space-x-2">
+                        <Link
+                          to={`/compliance/${obligation.obligation_id}`}
+                          className="inline-flex items-center justify-center p-2 bg-[#8cc63e] text-white rounded-md hover:bg-[#7ab83a] transition-colors"
+                          title="View"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                          </svg>
+                        </Link>
+                        {isAdmin && (
+                          <>
+                            <button
+                              onClick={() => handleEditClick(obligation)}
+                              className="inline-flex items-center justify-center p-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                              title="Edit"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                              </svg>
+                            </button>
+                            <button
+                              onClick={() => handleDeleteClick(obligation)}
+                              className="inline-flex items-center justify-center p-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                              title="Delete"
+                            >
+                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm font-medium text-gray-900">
                         {obligation.obligation_id}
                       </span>
                     </td>
-                    <td className="px-6 py-4">
+                    <td className="px-6 py-4 relative">
                       <div className="text-sm font-medium text-gray-900">
                         {obligation.name}
                       </div>
                       <div className="text-xs text-gray-500 line-clamp-1">
                         {obligation.description?.substring(0, 100)}...
                       </div>
+                      
+                      {/* Hover Tooltip with Full Details */}
+                      {hoveredObligation === obligation.id && (
+                        <div className="absolute left-0 top-full mt-1 w-96 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-4">
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-start">
+                              <h4 className="text-sm font-semibold text-gray-900">{obligation.name}</h4>
+                              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}>
+                                {obligation.current_status}
+                              </span>
+                            </div>
+                            <p className="text-sm text-gray-600">{obligation.description}</p>
+                            <div className="grid grid-cols-2 gap-2 text-xs">
+                              <div>
+                                <span className="font-medium text-gray-500">ID:</span>
+                                <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Domain:</span>
+                                <span className="ml-1 text-gray-700">{obligation.domain}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Frequency:</span>
+                                <span className="ml-1 text-gray-700">{obligation.frequency}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Due Date:</span>
+                                <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Responsible:</span>
+                                <span className="ml-1 text-gray-700">{obligation.responsible}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Accountable:</span>
+                                <span className="ml-1 text-gray-700">{obligation.accountable}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Weight:</span>
+                                <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Clause:</span>
+                                <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
+                              </div>
+                              <div className="col-span-2">
+                                <span className="font-medium text-gray-500">Region:</span>
+                                <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
+                              </div>
+                              {obligation.evidence_required && (
+                                <div className="col-span-2">
+                                  <span className="font-medium text-gray-500">Evidence:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.evidence_type || 'Required'}</span>
+                                </div>
+                              )}
+                              {obligation.mandatory && (
+                                <div className="col-span-2">
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                    Mandatory
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm text-gray-900">
@@ -782,30 +887,6 @@ const ComplianceRegister = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                       {obligation.compliance_weight}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                      <Link
-                        to={`/compliance/${obligation.obligation_id}`}
-                        className="text-[#8cc63e] hover:text-[#7ab83a] mr-3"
-                      >
-                        View
-                      </Link>
-                      {isAdmin && (
-                        <>
-                          <button
-                            onClick={() => handleEditClick(obligation)}
-                            className="text-[#8cc63e] hover:text-[#7ab83a] mr-3"
-                          >
-                            Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteClick(obligation)}
-                            className="text-red-600 hover:text-red-900"
-                          >
-                            Delete
-                          </button>
-                        </>
-                      )}
                     </td>
                   </tr>
                 );

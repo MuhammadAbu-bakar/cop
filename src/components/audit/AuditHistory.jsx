@@ -6,6 +6,7 @@ const AuditHistory = () => {
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   const fileInputRef = useRef(null);
+  const editFileInputRef = useRef(null);
   
   const [audits, setAudits] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -24,11 +25,30 @@ const AuditHistory = () => {
   const [uploadError, setUploadError] = useState("");
   const [auditFiles, setAuditFiles] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
+  
+  // Edit file states
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingFile, setEditingFile] = useState(null);
+  const [editFile, setEditFile] = useState(null);
+  const [editFileError, setEditFileError] = useState("");
+  const [updatingFile, setUpdatingFile] = useState(false);
+
+  // Statistics states
+  const [stats, setStats] = useState({
+    total: 0,
+    open: 0,
+    closed: 0
+  });
 
   useEffect(() => {
     fetchAudits();
     fetchAuditFiles();
   }, []);
+
+  // Calculate statistics whenever audits change
+  useEffect(() => {
+    calculateStats();
+  }, [audits]);
 
   const fetchAudits = async () => {
     setLoading(true);
@@ -45,6 +65,18 @@ const AuditHistory = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const calculateStats = () => {
+    const total = audits.length;
+    const open = audits.filter(a => a.status === "Open" || a.status === "In Progress" || a.status === "Under Review").length;
+    const closed = audits.filter(a => a.status === "Closed").length;
+    
+    setStats({
+      total,
+      open,
+      closed
+    });
   };
 
   const fetchAuditFiles = async () => {
@@ -157,6 +189,100 @@ const AuditHistory = () => {
       setUploadError(error.message || "Failed to upload file. Please try again.");
     } finally {
       setUploading(false);
+    }
+  };
+
+  // Handle edit file selection
+  const handleEditFileSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setEditFileError("");
+    setEditFile(null);
+
+    // Validate file size (max 50MB)
+    if (file.size > 50 * 1024 * 1024) {
+      setEditFileError("File size must be less than 50MB");
+      e.target.value = "";
+      return;
+    }
+
+    // Validate file type
+    const allowedTypes = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/vnd.ms-excel",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "image/jpeg",
+      "image/png",
+      "image/gif"
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      setEditFileError("Invalid file type. Please upload PDF, Word, Excel, or image files.");
+      e.target.value = "";
+      return;
+    }
+
+    setEditFile(file);
+  };
+
+  // Open edit modal
+  const openEditModal = (file) => {
+    setEditingFile(file);
+    setEditFile(null);
+    setEditFileError("");
+    setShowEditModal(true);
+    // Reset file input
+    if (editFileInputRef.current) {
+      editFileInputRef.current.value = "";
+    }
+  };
+
+  // Update (replace) audit file
+  const updateAuditFile = async () => {
+    if (!editingFile || !editFile) return;
+
+    setUpdatingFile(true);
+    setEditFileError("");
+
+    try {
+      // Delete the old file
+      const { error: deleteError } = await supabase.storage
+        .from("audit-history")
+        .remove([editingFile.name]);
+
+      if (deleteError) throw deleteError;
+
+      // Upload the new file with the same name (or update with new timestamp)
+      const timestamp = new Date().getTime();
+      // Keep the original file name structure but update timestamp
+      const fileName = editingFile.name.replace(/\d{13}/, timestamp);
+      
+      const { data: uploadData, error: uploadError } = await supabase.storage
+        .from("audit-history")
+        .upload(fileName, editFile, {
+          cacheControl: "3600",
+          upsert: false,
+        });
+
+      if (uploadError) throw uploadError;
+
+      // Refresh the file list
+      await fetchAuditFiles();
+
+      // Reset edit modal
+      setShowEditModal(false);
+      setEditingFile(null);
+      setEditFile(null);
+      
+      alert(`File updated successfully!`);
+    } catch (error) {
+      console.error("Error updating audit file:", error);
+      setEditFileError(error.message || "Failed to update file. Please try again.");
+    } finally {
+      setUpdatingFile(false);
     }
   };
 
@@ -431,6 +557,123 @@ const AuditHistory = () => {
         </div>
       )}
 
+      {/* Edit File Modal */}
+      {showEditModal && editingFile && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
+            <div className="border-b border-gray-200 p-4 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Update Audit File
+              </h3>
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingFile(null);
+                  setEditFile(null);
+                  setEditFileError("");
+                  if (editFileInputRef.current) {
+                    editFileInputRef.current.value = "";
+                  }
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="text-sm text-gray-500">Current File</p>
+                <p className="font-medium text-gray-900 break-words">{editingFile.displayName}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Size: {formatFileSize(editingFile.metadata?.size || 0)}
+                </p>
+              </div>
+
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+                <svg
+                  className="h-12 w-12 text-gray-400 mx-auto"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                  />
+                </svg>
+                <p className="mt-2 text-sm text-gray-600">
+                  Select new file to replace the current one
+                </p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Max file size: 50MB
+                </p>
+                <input
+                  ref={editFileInputRef}
+                  type="file"
+                  onChange={handleEditFileSelect}
+                  disabled={updatingFile}
+                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                />
+                {editFileError && (
+                  <div className="mt-2 text-sm text-red-600 break-words">
+                    {editFileError}
+                  </div>
+                )}
+                {editFile && (
+                  <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                    <p className="text-sm text-green-700 font-medium break-words">
+                      New file selected: {editFile.name}
+                    </p>
+                    <p className="text-xs text-green-600">
+                      Size: {(editFile.size / 1024).toFixed(1)} KB
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex space-x-3 pt-4">
+                <button
+                  onClick={updateAuditFile}
+                  disabled={updatingFile || !editFile}
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {updatingFile ? (
+                    <>
+                      <svg className="animate-spin -ml-1 mr-2 h-4 w-4 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                      Updating...
+                    </>
+                  ) : (
+                    "Update File"
+                  )}
+                </button>
+                <button
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingFile(null);
+                    setEditFile(null);
+                    setEditFileError("");
+                    if (editFileInputRef.current) {
+                      editFileInputRef.current.value = "";
+                    }
+                  }}
+                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Filters */}
       <div className="bg-white rounded-lg shadow p-4">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -461,10 +704,25 @@ const AuditHistory = () => {
 
       {/* Audit Files Section */}
       <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-semibold text-gray-900">
-            Audit Files - CMCC 2025-2026
-          </h3>
+        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+          <div className="flex items-center gap-4 flex-wrap">
+            <h3 className="text-lg font-semibold text-gray-900">
+              Audit Files - CMCC 2025-2026
+            </h3>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-gray-600">
+                Total: <span className="font-semibold text-gray-900">{stats.total}</span>
+              </span>
+              <span className="text-gray-300">|</span>
+              <span className="text-yellow-600">
+                Open: <span className="font-semibold">{stats.open}</span>
+              </span>
+              <span className="text-gray-300">|</span>
+              <span className="text-green-600">
+                Closed: <span className="font-semibold">{stats.closed}</span>
+              </span>
+            </div>
+          </div>
           {isAdmin && (
             <button
               onClick={() => setShowUploadModal(true)}
@@ -540,15 +798,26 @@ const AuditHistory = () => {
                       </svg>
                     </button>
                     {isAdmin && (
-                      <button
-                        onClick={() => handleFileDelete(file)}
-                        className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
-                        title="Delete file"
-                      >
-                        <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
+                      <>
+                        <button
+                          onClick={() => openEditModal(file)}
+                          className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded transition-colors"
+                          title="Update file"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => handleFileDelete(file)}
+                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                          title="Delete file"
+                        >
+                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -557,8 +826,6 @@ const AuditHistory = () => {
           </div>
         )}
       </div>
-
-      
 
       {filteredAudits.length === 0 && (
         <div className="bg-white rounded-lg shadow p-12 text-center">

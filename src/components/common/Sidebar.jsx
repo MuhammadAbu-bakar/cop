@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
-import zongLogo from "../../assets/images/zong-logo.jpg";
+import zongLogo from "../../assets/images/cop-logo.png";
 
 const Sidebar = () => {
   const { profile } = useAuth();
