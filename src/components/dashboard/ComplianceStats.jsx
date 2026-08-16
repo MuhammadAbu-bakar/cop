@@ -1,89 +1,113 @@
+// ============================================================
+// ComplianceStats.jsx - Executive Summary Cards with Recharts Donut Charts
+// ============================================================
+
 import { useNavigate } from "react-router-dom";
+import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { 
+  FaArrowUp, 
+  FaArrowDown, 
+  FaMinus,
+  FaExclamationTriangle,
+  FaCheckCircle,
+  FaClock,
+  FaFileAlt,
+  FaExclamationCircle,
+  FaChartLine,
+  FaShieldAlt,
+  FaFlag,
+  FaGlobe
+} from 'react-icons/fa';
+import { FiTrendingUp, FiTrendingDown } from 'react-icons/fi';
 
 const ComplianceStats = ({ stats }) => {
   const navigate = useNavigate();
 
-  const calculatePercentage = (completed, total) => {
-    if (total === 0) return 0;
-    return Math.round((completed / total) * 100);
-  };
-
-  const overallCompliance = calculatePercentage(
-    stats.completed || 0,
-    stats.totalObligations || 0,
-  );
-
-  // Handle card click to navigate with filter
   const handleCardClick = (filterType, filterValue) => {
     const params = new URLSearchParams();
-    
     if (filterType === 'status') {
       params.set('status', filterValue);
-    } else if (filterType === 'all') {
-      // No filters - just go to compliance
     }
-    
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`);
   };
 
-  const HalfSpeedometer = ({ percentage }) => {
-    const radius = 35;
-    const strokeWidth = 8;
-    const circumference = Math.PI * radius;
+  const getChangeColor = (change) => {
+    if (!change) return "text-gray-500";
+    const numChange = parseFloat(change);
+    if (numChange > 0) return "text-green-600";
+    if (numChange < 0) return "text-red-600";
+    return "text-gray-500";
+  };
 
-    const halfCircumference = circumference;
-    const dashOffset =
-      halfCircumference - (percentage / 100) * halfCircumference;
+  const getChangeIcon = (change) => {
+    if (!change) return null;
+    const numChange = parseFloat(change);
+    if (numChange > 0) {
+      return <FaArrowUp className="h-3 w-3 inline" />;
+    }
+    if (numChange < 0) {
+      return <FaArrowDown className="h-3 w-3 inline" />;
+    }
+    return <FaMinus className="h-3 w-3 inline" />;
+  };
 
+  // Get icon for each stat card
+  const getStatIcon = (title, color) => {
+    const iconMap = {
+      "Overall Compliance": <FaChartLine className="h-4 w-4" style={{ color: color }} />,
+      "Audit Readiness": <FaShieldAlt className="h-4 w-4" style={{ color: color }} />,
+      "Mandatory Obligations": <FaCheckCircle className="h-4 w-4" style={{ color: color }} />,
+      "Overdue Obligations": <FaClock className="h-4 w-4" style={{ color: color }} />,
+      "Evidence Completion": <FaFileAlt className="h-4 w-4" style={{ color: color }} />,
+      "High-Risk Gaps": <FaExclamationTriangle className="h-4 w-4" style={{ color: color }} />,
+      "Regions Below Target": <FaGlobe className="h-4 w-4" style={{ color: color }} />,
+    };
+    return iconMap[title] || <FaExclamationCircle className="h-4 w-4" style={{ color: color }} />;
+  };
+
+  // Donut Chart Component using Recharts
+  const DonutChart = ({ percentage, size = 70, color = "#000072" }) => {
     const getColor = (value) => {
       if (value >= 80) return "#22c55e";
-      if (value >= 60) return "#84cc16";
-      if (value >= 40) return "#eab308";
-      if (value >= 20) return "#f97316";
+      if (value >= 60) return "#eab308";
+      if (value >= 40) return "#f97316";
       return "#ef4444";
     };
 
-    const color = getColor(percentage);
+    const chartColor = color === "#000072" ? getColor(percentage) : color;
+    
+    const data = [
+      { name: 'Completed', value: percentage },
+      { name: 'Remaining', value: 100 - percentage }
+    ];
 
     return (
-      <div className="relative inline-flex items-center justify-start w-full">
-        <svg className="w-full max-w-[70px] xs:max-w-[80px] sm:max-w-[90px] md:max-w-[110px] lg:max-w-[130px] h-12 xs:h-14 sm:h-16 md:h-18 lg:h-20 mx-auto" viewBox="0 0 100 55">
-          <path
-            d="M 15 45 A 35 35 0 0 1 85 45"
-            fill="none"
-            stroke="#e5e7eb"
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
-          />
-          <path
-            d="M 15 45 A 35 35 0 0 1 85 45"
-            fill="none"
-            stroke={color}
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
-            strokeDasharray={circumference}
-            strokeDashoffset={dashOffset}
-            className="transition-all duration-1000 ease-in-out"
-          />
-          <text
-            x="50"
-            y="38"
-            textAnchor="middle"
-            className="text-base xs:text-lg sm:text-xl md:text-2xl font-bold"
-            fill={color}
-          >
+      <div className="relative inline-flex items-center justify-center" style={{ width: size, height: size }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <PieChart>
+            <Pie
+              data={data}
+              cx="50%"
+              cy="50%"
+              innerRadius="70%"
+              outerRadius="100%"
+              paddingAngle={0}
+              dataKey="value"
+              startAngle={90}
+              endAngle={-270}
+              stroke="none"
+            >
+              <Cell key="completed" fill={chartColor} />
+              <Cell key="remaining" fill="#e5e7eb" />
+            </Pie>
+          </PieChart>
+        </ResponsiveContainer>
+        {/* Center text */}
+        <div className="absolute inset-0 flex items-center justify-center">
+          <span className="text-sm font-bold" style={{ color: chartColor }}>
             {percentage}%
-          </text>
-          <text
-            x="50"
-            y="48"
-            textAnchor="middle"
-            className="text-[6px] xs:text-[7px] sm:text-[8px] md:text-[10px]"
-            fill="#9ca3af"
-          >
-            Compliance
-          </text>
-        </svg>
+          </span>
+        </div>
       </div>
     );
   };
@@ -91,146 +115,143 @@ const ComplianceStats = ({ stats }) => {
   const statCards = [
     {
       title: "Overall Compliance",
-      subtitle: `${stats.completed || 0} of ${stats.totalObligations || 0} completed`,
-      color: "purple",
-      isSpeedometer: true,
-      percentage: overallCompliance,
+      value: `${stats.overallCompliance || 0}%`,
+      change: "2% vs. last month",
+      color: "#000072",
       filterType: "all",
       filterValue: null,
+      isPrimary: true,
+      showDonut: true,
+      percentage: stats.overallCompliance || 0,
     },
     {
-      title: "Total Obligations",
-      value: stats.totalObligations || 0,
-      subtitle: `${stats.completed || 0} completed • ${stats.inProgress || stats.notStarted || 0} in progress`,
-      icon: "M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10",
-      color: "blue",
-      filterType: "all",
+      title: "Audit Readiness",
+      value: `${stats.auditReadiness || 0}%`,
+      change: "3% vs. last month",
+      color: "#3b82f6",
+      filterType: null,
       filterValue: null,
+      showDonut: true,
+      percentage: stats.auditReadiness || 0,
     },
     {
-      title: "Completed",
-      value: stats.completed || 0,
-      subtitle: `${calculatePercentage(stats.completed, stats.totalObligations)}% of total`,
-      icon: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
-      color: "green",
-      filterType: "status",
-      filterValue: "Completed",
+      title: "Mandatory Obligations",
+      value: `${stats.completed || 0} / ${stats.totalObligations || 0}`,
+      subtitle: `${Math.round((stats.completed / stats.totalObligations) * 100)}% Compliant`,
+      color: "#22c55e",
+      filterType: null,
+      filterValue: null,
+      isObligation: true,
+      showDonut: false,
     },
     {
-      title: "In Progress",
-      value: stats.inProgress || stats.notStarted || 0,
-      subtitle: `${calculatePercentage(stats.inProgress || stats.notStarted || 0, stats.totalObligations)}% of total`,
-      icon: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
-      color: "gray",
-      filterType: "status",
-      filterValue: "In Progress",
-    },
-    {
-      title: "Overdue",
+      title: "Overdue Obligations",
       value: stats.overdue || 0,
-      subtitle: `${stats.pending || 0} pending overall`,
-      icon: "M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
-      color: "red",
+      change: "40% vs. last month",
+      color: "#ef4444",
       filterType: "status",
       filterValue: "Overdue",
+      isWarning: true,
+      showDonut: false,
+    },
+    {
+      title: "Evidence Completion",
+      value: `${stats.evidenceCompletion || 0}%`,
+      change: "2% vs. last month",
+      color: "#8b5cf6",
+      filterType: null,
+      filterValue: null,
+      showDonut: true,
+      percentage: stats.evidenceCompletion || 0,
+    },
+    {
+      title: "High-Risk Gaps",
+      value: stats.highRiskGaps || 0,
+      change: "50% vs. last month",
+      color: "#f97316",
+      filterType: null,
+      filterValue: null,
+      isWarning: true,
+      showDonut: false,
+    },
+    {
+      title: "Regions Below Target",
+      value: `${stats.regionsBelowTarget || 0} / ${stats.regionsTotal || 6}`,
+      color: "#ec4899",
+      filterType: null,
+      filterValue: null,
+      showDonut: false,
     },
   ];
 
-  const getColorClasses = (color) => {
-    const colors = {
-      blue: "bg-blue-100 text-blue-600",
-      purple: "bg-purple-100 text-purple-600",
-      green: "bg-green-100 text-green-600",
-      orange: "bg-orange-100 text-orange-600",
-      red: "bg-red-100 text-red-600",
-      gray: "bg-gray-100 text-gray-600",
-    };
-    return colors[color] || colors.blue;
-  };
-
-  const getBorderColor = (color) => {
-    const colors = {
-      blue: "#3b82f6",
-      green: "#8cc63e",
-      orange: "#f97316",
-      red: "#ef4444",
-      purple: "#8b5cf6",
-      gray: "#9ca3af",
-    };
-    return colors[color] || "#8cc63e";
-  };
-
-  const getCursorClass = (filterType) => {
-    return filterType ? "cursor-pointer hover:shadow-xl transition-all duration-200" : "cursor-default";
-  };
-
   return (
-    <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-5 gap-2 sm:gap-3 md:gap-4">
-      {statCards.map((stat, index) => (
-        <div
-          key={index}
-          onClick={() => stat.filterType && handleCardClick(stat.filterType, stat.filterValue)}
-          className={`bg-white rounded-lg shadow hover:shadow-lg transition-all border-l-4 flex flex-col h-full ${getCursorClass(stat.filterType)}`}
-          style={{
-            borderLeftColor: getBorderColor(stat.color),
-          }}
-          role={stat.filterType ? "button" : "presentation"}
-          tabIndex={stat.filterType ? 0 : -1}
-          onKeyDown={(e) => {
-            if (stat.filterType && (e.key === 'Enter' || e.key === ' ')) {
-              e.preventDefault();
-              handleCardClick(stat.filterType, stat.filterValue);
-            }
-          }}
-        >
-          <div className="p-2 sm:p-3 md:p-4 lg:p-5 flex-1 flex flex-col">
-            {!stat.isSpeedometer ? (
-              <div className="flex items-center justify-between flex-1">
-                <div className="flex-1 min-w-0 pr-1 sm:pr-2">
-                  <p className="text-[8px] xs:text-[9px] sm:text-[10px] md:text-xs text-gray-500 font-medium whitespace-normal break-words">
-                    {stat.title}
-                  </p>
-                  <p className="text-base xs:text-lg sm:text-xl md:text-2xl font-bold text-gray-900 leading-tight mt-2 sm:mt-3 md:mt-4">
-                    {stat.value}
-                  </p>
-                  <p className="text-[7px] xs:text-[8px] sm:text-[9px] md:text-[10px] text-gray-500 mt-2 sm:mt-3 md:mt-4 whitespace-normal break-words">
-                    {stat.subtitle}
-                  </p>
-                </div>
-                <div
-                  className={`flex-shrink-0 p-1 sm:p-1.5 md:p-2 lg:p-2.5 rounded-full ${getColorClasses(stat.color)}`}
-                >
-                  <svg
-                    className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 lg:h-5 lg:w-5"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d={stat.icon}
-                    />
-                  </svg>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center flex-1 justify-center">
-                <p className="text-[8px] xs:text-[9px] sm:text-[10px] md:text-xs text-gray-500 font-medium text-center w-full whitespace-normal break-words">
+    <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5 lg:p-6 overflow-hidden">
+      {/* Section Header */}
+      <div className="mb-4">
+        <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
+          Executive Summary
+        </h3>
+        <p className="text-xs text-gray-500 mt-0.5">Compliance overview at a glance</p>
+      </div>
+
+      {/* Stats Cards Grid */}
+      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
+        {statCards.map((stat, index) => (
+          <div
+            key={index}
+            onClick={() => stat.filterType && handleCardClick(stat.filterType, stat.filterValue)}
+            className={`bg-white rounded-lg border hover:shadow-lg transition-all p-3 sm:p-4 flex flex-col items-center ${
+              stat.filterType ? "cursor-pointer hover:border-gray-300" : "cursor-default"
+            } ${stat.isWarning ? "border-red-200" : "border-gray-200"} ${
+              stat.isPrimary ? "border-t-4" : ""
+            }`}
+            style={stat.isPrimary ? { borderTopColor: stat.color } : {}}
+          >
+            <div className="flex-1 w-full">
+              <div className="flex items-center justify-center gap-1.5 mb-1">
+                {getStatIcon(stat.title, stat.color)}
+                <p className="text-[10px] xs:text-[11px] text-gray-500 font-medium uppercase tracking-wide text-center">
                   {stat.title}
                 </p>
-                <div className="my-0.5 sm:my-1 w-full flex justify-center">
-                  <HalfSpeedometer percentage={stat.percentage} />
-                </div>
-                <p className="text-[7px] xs:text-[8px] sm:text-[9px] md:text-[10px] text-gray-500 text-center w-full whitespace-normal break-words">
-                  {stat.subtitle}
-                </p>
               </div>
-            )}
+              
+              {/* Donut Chart or Value */}
+              {stat.showDonut ? (
+                <div className="flex flex-col items-center mt-1">
+                  <DonutChart 
+                    percentage={stat.percentage} 
+                    size={70}
+                    color={stat.color}
+                  />
+                </div>
+              ) : (
+                <div className="mt-1 text-center">
+                  <span className={`text-lg sm:text-xl md:text-2xl font-bold ${
+                    stat.isWarning ? "text-red-600" : "text-gray-900"
+                  }`}>
+                    {stat.value}
+                  </span>
+                </div>
+              )}
+              
+              {/* Change Indicator */}
+              {stat.change && (
+                <div className="flex items-center justify-center mt-0.5">
+                  <span className={`text-[10px] xs:text-xs font-medium ${getChangeColor(stat.change)}`}>
+                    {getChangeIcon(stat.change)}
+                    <span className="ml-0.5">{stat.change}</span>
+                  </span>
+                </div>
+              )}
+              
+              {/* Subtitle for obligations */}
+              {stat.subtitle && (
+                <p className="text-[10px] xs:text-xs text-gray-500 text-center mt-0.5">{stat.subtitle}</p>
+              )}
+            </div>
           </div>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 };

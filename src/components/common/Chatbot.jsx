@@ -15,7 +15,7 @@ Supabase Edge Function.
 */
 
 const GROQ_API_KEY =
-  "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";
+  "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";
 
 const GROQ_URL =
   "https://api.groq.com/openai/v1/chat/completions";
@@ -655,7 +655,7 @@ ${error?.message || "Unknown error"}`,
           ${
             isOpen
               ? "bg-red-500 hover:bg-red-600 rotate-90"
-              : "bg-[#8cc63e] hover:bg-[#7ab83a]"
+              : "bg-[#00008b] hover:bg-[#00006b]"
           }
           text-white
         `}
@@ -717,7 +717,8 @@ ${error?.message || "Unknown error"}`,
             z-50
             w-[420px]
             max-w-[calc(100vw-32px)]
-            h-[620px]
+            h-[700px]
+            max-h-[calc(100vh-120px)]
             bg-white
             rounded-2xl
             shadow-2xl
@@ -737,12 +738,13 @@ ${error?.message || "Unknown error"}`,
           <div
             className="
               bg-gradient-to-r
-              from-[#8cc63e]
-              to-[#6ab04c]
+              from-[#00008b]
+              to-[#00006b]
               p-4
               flex
               items-center
               justify-between
+              flex-shrink-0
             "
           >
 
@@ -876,80 +878,7 @@ ${error?.message || "Unknown error"}`,
               QUICK QUESTIONS
           ================================================= */}
 
-          {messages.length === 1 && (
-
-            <div
-              className="
-                px-3
-                pt-3
-                pb-2
-                bg-gray-50
-                border-b
-                border-gray-200
-              "
-            >
-
-              <p
-                className="
-                  text-xs
-                  text-gray-500
-                  mb-2
-                "
-              >
-                Suggested questions
-              </p>
-
-
-              <div
-                className="
-                  flex
-                  flex-wrap
-                  gap-2
-                "
-              >
-
-                {quickQuestions.map(
-                  (question) => (
-
-                    <button
-
-                      key={
-                        question
-                      }
-
-                      onClick={() =>
-                        askQuickQuestion(
-                          question
-                        )
-                      }
-
-                      className="
-                        text-xs
-                        bg-white
-                        border
-                        border-gray-200
-                        rounded-full
-                        px-3
-                        py-1.5
-                        text-gray-600
-                        hover:border-[#8cc63e]
-                        hover:text-[#6ab04c]
-                        transition
-                      "
-                    >
-
-                      {question}
-
-                    </button>
-
-                  )
-                )}
-
-              </div>
-
-            </div>
-
-          )}
+          
 
 
           {/* =================================================
@@ -963,6 +892,7 @@ ${error?.message || "Unknown error"}`,
               p-4
               space-y-3
               bg-gray-50
+              min-h-0
             "
           >
 
@@ -996,7 +926,7 @@ ${error?.message || "Unknown error"}`,
                         "user"
 
                           ? `
-                            bg-[#8cc63e]
+                            bg-[#00008b]
                             text-white
                             rounded-br-none
                           `
@@ -1247,6 +1177,7 @@ ${error?.message || "Unknown error"}`,
               border-gray-200
               p-3
               bg-white
+              flex-shrink-0
             "
           >
 
@@ -1292,7 +1223,7 @@ ${error?.message || "Unknown error"}`,
                   text-sm
                   focus:outline-none
                   focus:ring-2
-                  focus:ring-[#8cc63e]
+                  focus:ring-[#00008b]
                   focus:border-transparent
                 "
 
@@ -1318,12 +1249,12 @@ ${error?.message || "Unknown error"}`,
                 }
 
                 className="
-                  bg-[#8cc63e]
+                  bg-[#00008b]
                   text-white
                   px-4
                   py-2
                   rounded-lg
-                  hover:bg-[#7ab83a]
+                  hover:bg-[#00006b]
                   transition-colors
                   disabled:opacity-50
                   disabled:cursor-not-allowed

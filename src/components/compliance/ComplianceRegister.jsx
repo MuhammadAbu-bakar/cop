@@ -17,6 +17,7 @@ const ComplianceRegister = () => {
   const [filterFrequency, setFilterFrequency] = useState("all");
   const [filterDomain, setFilterDomain] = useState("all");
   const [hoveredObligation, setHoveredObligation] = useState(null);
+  const [activeTab, setActiveTab] = useState("cyclic"); // "cyclic" or "event"
 
   // Add Modal States
   const [showAddModal, setShowAddModal] = useState(false);
@@ -43,6 +44,7 @@ const ComplianceRegister = () => {
     compliance_weight: 1,
     current_status: "Not Started",
     region: "",
+    obligation_type: "cyclic", // "cyclic" or "event"
   });
 
   // Edit Modal States
@@ -64,6 +66,7 @@ const ComplianceRegister = () => {
     mandatory: false,
     compliance_weight: 1,
     current_status: "",
+    obligation_type: "cyclic",
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState("");
@@ -273,7 +276,7 @@ const ComplianceRegister = () => {
   };
 
   // Add Functions
-  const handleAddClick = () => {
+  const handleAddClick = (type) => {
     setAddFormData({
       obligation_id: "",
       policy_id: null,
@@ -283,7 +286,7 @@ const ComplianceRegister = () => {
       description: "",
       responsible: "",
       accountable: "",
-      frequency: "Monthly",
+      frequency: type === "cyclic" ? "Monthly" : "Event Based",
       due_date_rule: "",
       evidence_required: false,
       evidence_type: "",
@@ -294,6 +297,7 @@ const ComplianceRegister = () => {
       compliance_weight: 1,
       current_status: "Not Started",
       region: "",
+      obligation_type: type,
     });
     setAddError("");
     setAddSuccess("");
@@ -368,6 +372,7 @@ const ComplianceRegister = () => {
           compliance_weight: parseInt(addFormData.compliance_weight),
           current_status: addFormData.current_status,
           region: addFormData.region,
+          obligation_type: addFormData.obligation_type,
         })
         .select();
 
@@ -410,6 +415,7 @@ const ComplianceRegister = () => {
       mandatory: obligation.mandatory || false,
       compliance_weight: obligation.compliance_weight || 1,
       current_status: obligation.current_status || "Not Started",
+      obligation_type: obligation.obligation_type || "cyclic",
     });
     setEditError("");
     setShowEditModal(true);
@@ -447,6 +453,7 @@ const ComplianceRegister = () => {
           mandatory: editFormData.mandatory,
           compliance_weight: parseInt(editFormData.compliance_weight),
           current_status: editFormData.current_status,
+          obligation_type: editFormData.obligation_type,
           updated_at: new Date().toISOString(),
         })
         .eq("id", editingObligation.id)
@@ -537,29 +544,70 @@ const ComplianceRegister = () => {
     setFilterStatus("all");
     setFilterFrequency("all");
     setFilterDomain("all");
-    // Remove URL parameters
     navigate('/compliance', { replace: true });
   };
 
-  const filteredObligations = obligations.filter((obligation) => {
-    const matchesSearch =
-      obligation.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      obligation.description
-        ?.toLowerCase()
-        .includes(searchTerm.toLowerCase()) ||
-      obligation.obligation_id
-        ?.toLowerCase()
-        .includes(searchTerm.toLowerCase());
+  // Filter obligations based on active tab - CORRECTED
+  const getFilteredObligations = () => {
+    let filtered = obligations;
 
-    const matchesStatus =
-      filterStatus === "all" || obligation.current_status === filterStatus;
-    const matchesFrequency =
-      filterFrequency === "all" || obligation.frequency === filterFrequency;
-    const matchesDomain =
-      filterDomain === "all" || obligation.domain === filterDomain;
+    // Filter by tab - using BOTH obligation_type AND frequency
+    if (activeTab === "cyclic") {
+      // Cyclic Based: obligation_type is "cyclic" OR null/undefined, AND frequency is NOT "Event Based"
+      filtered = filtered.filter(o => {
+        const isCyclicType = o.obligation_type === "cyclic" || o.obligation_type === null || o.obligation_type === undefined;
+        const isNotEventBased = o.frequency !== "Event Based";
+        return isCyclicType && isNotEventBased;
+      });
+    } else if (activeTab === "event") {
+      // Event Based: obligation_type is "event" OR frequency is "Event Based"
+      filtered = filtered.filter(o => {
+        const isEventType = o.obligation_type === "event";
+        const isEventFrequency = o.frequency === "Event Based";
+        return isEventType || isEventFrequency;
+      });
+    }
 
-    return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
-  });
+    // Apply search, status, frequency, domain filters
+    return filtered.filter((obligation) => {
+      const matchesSearch =
+        obligation.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        obligation.description
+          ?.toLowerCase()
+          .includes(searchTerm.toLowerCase()) ||
+        obligation.obligation_id
+          ?.toLowerCase()
+          .includes(searchTerm.toLowerCase());
+
+      const matchesStatus =
+        filterStatus === "all" || obligation.current_status === filterStatus;
+      const matchesFrequency =
+        filterFrequency === "all" || obligation.frequency === filterFrequency;
+      const matchesDomain =
+        filterDomain === "all" || obligation.domain === filterDomain;
+
+      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
+    });
+  };
+
+  const filteredObligations = getFilteredObligations();
+
+  // Get counts for tabs - CORRECTED
+  const getCyclicCount = () => {
+    return obligations.filter(o => {
+      const isCyclicType = o.obligation_type === "cyclic" || o.obligation_type === null || o.obligation_type === undefined;
+      const isNotEventBased = o.frequency !== "Event Based";
+      return isCyclicType && isNotEventBased;
+    }).length;
+  };
+
+  const getEventCount = () => {
+    return obligations.filter(o => {
+      const isEventType = o.obligation_type === "event";
+      const isEventFrequency = o.frequency === "Event Based";
+      return isEventType || isEventFrequency;
+    }).length;
+  };
 
   if (loading) {
     return (
@@ -597,26 +645,79 @@ const ComplianceRegister = () => {
           </p>
         </div>
         {isAdmin && (
-          <button
-            onClick={handleAddClick}
-            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center w-full sm:w-auto justify-center"
-          >
-            <svg
-              className="h-5 w-5 mr-2"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => handleAddClick("cyclic")}
+              className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth="2"
-                d="M12 4v16m8-8H4"
-              />
-            </svg>
-            Add New Obligation
-          </button>
+              <svg
+                className="h-5 w-5 mr-2"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+              Add Cyclic Based
+            </button>
+            <button
+              onClick={() => handleAddClick("event")}
+              className="bg-orange-500 text-white px-4 py-2 rounded-md hover:bg-orange-600 transition-colors flex items-center"
+            >
+              <svg
+                className="h-5 w-5 mr-2"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M12 4v16m8-8H4"
+                />
+              </svg>
+              Add Event Based
+            </button>
+          </div>
         )}
+      </div>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8">
+          <button
+            onClick={() => setActiveTab("cyclic")}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === "cyclic"
+                ? "border-[#8cc63e] text-[#8cc63e]"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
+          >
+            Cyclic Based
+            <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">
+              {getCyclicCount()}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("event")}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
+              activeTab === "event"
+                ? "border-orange-500 text-orange-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
+          >
+            Event Based
+            <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">
+              {getEventCount()}
+            </span>
+          </button>
+        </nav>
       </div>
 
       {/* Filters */}
@@ -636,7 +737,6 @@ const ComplianceRegister = () => {
               value={filterStatus}
               onChange={(e) => {
                 setFilterStatus(e.target.value);
-                // Update URL when status changes
                 const params = new URLSearchParams(location.search);
                 if (e.target.value === "all") {
                   params.delete('status');
@@ -907,7 +1007,7 @@ const ComplianceRegister = () => {
           <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center">
               <h3 className="text-lg font-semibold text-gray-900">
-                Add New Obligation
+                Add New {addFormData.obligation_type === "cyclic" ? "Cyclic Based" : "Event Based"} Obligation
               </h3>
               <button
                 onClick={() => setShowAddModal(false)}
@@ -1078,13 +1178,17 @@ const ComplianceRegister = () => {
                     required
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    <option value="Monthly">Monthly</option>
-                    <option value="Quarterly">Quarterly</option>
-                    <option value="Yearly">Yearly</option>
-                    <option value="Annual">Annual</option>
-                    <option value="Event Based">Event Based</option>
-                    <option value="Continuous">Continuous</option>
-                    <option value="Bi-Annual">Bi-Annual</option>
+                    {addFormData.obligation_type === "cyclic" ? (
+                      <>
+                        <option value="Monthly">Monthly</option>
+                        <option value="Quarterly">Quarterly</option>
+                        <option value="Yearly">Yearly</option>
+                        <option value="Annual">Annual</option>
+                        <option value="Bi-Annual">Bi-Annual</option>
+                      </>
+                    ) : (
+                      <option value="Event Based">Event Based</option>
+                    )}
                   </select>
                 </div>
 
@@ -1371,13 +1475,18 @@ const ComplianceRegister = () => {
                     required
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    <option value="Monthly">Monthly</option>
-                    <option value="Quarterly">Quarterly</option>
-                    <option value="Yearly">Yearly</option>
-                    <option value="Annual">Annual</option>
-                    <option value="Event Based">Event Based</option>
-                    <option value="Continuous">Continuous</option>
-                    <option value="Bi-Annual">Bi-Annual</option>
+                    {editFormData.obligation_type === "cyclic" ? (
+                      <>
+                        <option value="Monthly">Monthly</option>
+                        <option value="Quarterly">Quarterly</option>
+                        <option value="Yearly">Yearly</option>
+                        <option value="Annual">Annual</option>
+                        <option value="Bi-Annual">Bi-Annual</option>
+                        <option value="Continuous">Continuous</option>
+                      </>
+                    ) : (
+                      <option value="Event Based">Event Based</option>
+                    )}
                   </select>
                 </div>
 

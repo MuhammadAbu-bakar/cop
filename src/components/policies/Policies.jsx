@@ -289,7 +289,7 @@ const Policies = () => {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#00008b] mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading policies...</p>
         </div>
       </div>
@@ -312,7 +312,7 @@ const Policies = () => {
               setUploadError("");
               setUploadSuccess("");
             }}
-            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
+            className="bg-[#00008b] text-white px-4 py-2 rounded-md hover:bg-[#00006b] transition-colors flex items-center"
           >
             <svg
               className="h-5 w-5 mr-2"
@@ -340,7 +340,7 @@ const Policies = () => {
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="Search policies by title, description, or file name..."
-            className="w-full px-3 py-2 pl-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+            className="w-full px-3 py-2 pl-10 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
           />
           <svg
             className="absolute left-3 top-2.5 h-5 w-5 text-gray-400"
@@ -403,7 +403,7 @@ const Policies = () => {
                     href={policy.file_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-[#8cc63e] text-white text-xs sm:text-sm rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
+                    className="px-3 sm:px-4 py-1.5 sm:py-2 bg-[#00008b] text-white text-xs sm:text-sm rounded-md hover:bg-[#00006b] transition-colors flex items-center"
                   >
                     <svg
                       className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
@@ -501,7 +501,7 @@ const Policies = () => {
           {isAdmin && !searchTerm && (
             <button
               onClick={() => setShowUploadModal(true)}
-              className="mt-4 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors"
+              className="mt-4 bg-[#00008b] text-white px-4 py-2 rounded-md hover:bg-[#00006b] transition-colors"
             >
               Upload Policy
             </button>
@@ -562,7 +562,7 @@ const Policies = () => {
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="Enter policy title"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b]"
                 />
               </div>
 
@@ -575,7 +575,7 @@ const Policies = () => {
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Enter policy description (optional)"
                   rows="3"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b]"
                 />
               </div>
 
@@ -588,13 +588,13 @@ const Policies = () => {
                   type="file"
                   onChange={handleFileSelect}
                   accept=".pdf,.doc,.docx,.txt"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e] file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b] file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#00008b]/10 file:text-[#00008b] hover:file:bg-[#00008b]/20"
                 />
                 <p className="text-xs text-gray-500 mt-1">
                   Accepted formats: PDF, Word, Text (Max 10MB)
                 </p>
                 {selectedFile && (
-                  <p className="text-sm text-[#8cc63e] mt-2">
+                  <p className="text-sm text-[#00008b] mt-2">
                     Selected: {selectedFile.name} ({formatFileSize(selectedFile.size)})
                   </p>
                 )}
@@ -604,7 +604,7 @@ const Policies = () => {
                 <button
                   onClick={handleUpload}
                   disabled={uploading}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#00008b] text-white py-2 rounded-md hover:bg-[#00006b] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {uploading ? (
                     <>

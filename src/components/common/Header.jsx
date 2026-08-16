@@ -1,3 +1,7 @@
+// ============================================================
+// Header.jsx - Navy blue background, full width, with COP logo
+// ============================================================
+
 import { useState, useRef, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
@@ -5,6 +9,7 @@ import { useAuth } from "../../context/AuthContext";
 const Header = () => {
   const { profile, logout } = useAuth();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [currentDateTime, setCurrentDateTime] = useState(new Date());
   const dropdownRef = useRef(null);
 
   useEffect(() => {
@@ -17,14 +22,28 @@ const Header = () => {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const getRoleBadge = (role) => {
-    const badges = {
-      admin: "bg-purple-100 text-purple-800",
-      management: "bg-blue-100 text-blue-800",
-      regional_user: "bg-green-100 text-green-800",
-      reviewer: "bg-orange-100 text-orange-800",
-    };
-    return badges[role] || "bg-gray-100 text-gray-800";
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentDateTime(new Date());
+    }, 60000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatDate = (date) => {
+    return date.toLocaleDateString("en-US", {
+      weekday: "short",
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  };
+
+  const formatTime = (date) => {
+    return date.toLocaleTimeString("en-US", {
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: true,
+    });
   };
 
   const getRoleDisplayName = (role) => {
@@ -37,6 +56,16 @@ const Header = () => {
     return names[role] || role || "User";
   };
 
+  const getRoleBadge = (role) => {
+    const badges = {
+      admin: "bg-indigo-100 text-indigo-800",
+      management: "bg-blue-100 text-blue-800",
+      regional_user: "bg-emerald-100 text-emerald-800",
+      reviewer: "bg-amber-100 text-amber-800",
+    };
+    return badges[role] || "bg-gray-100 text-gray-800";
+  };
+
   const getDisplayName = () => {
     if (profile?.full_name) return profile.full_name;
     if (profile?.email) return profile.email.split("@")[0];
@@ -44,51 +73,64 @@ const Header = () => {
   };
 
   return (
-    <header className="bg-white shadow-sm h-14 sm:h-16 flex items-center justify-between px-2 sm:px-4 md:px-6">
-      <div className="flex items-center min-w-0">
-        <h2 className="text-xs sm:text-sm md:text-base lg:text-lg font-semibold text-gray-700 truncate">
-          Compliance Orchestration Platform
-        </h2>
+    <header 
+      className="h-12 sm:h-14 flex items-center justify-between px-3 sm:px-4 md:px-6 fixed top-0 left-0 right-0 z-20 ml-0 md:ml-16 lg:ml-20"
+      style={{ backgroundColor: "#00008b" }}
+    >
+      {/* Left - COP Logo and Title */}
+      <div className="flex items-center space-x-2 min-w-0 flex-shrink-0">
+        {/* Removed hidden xs:block - now always visible */}
+        <div className="block">
+          <h1 className="text-xs sm:text-sm font-bold tracking-tight leading-tight text-white whitespace-nowrap">
+            <span className="text-white text-2xl">COP</span>
+            <span className="text-blue-300 font-normal mx-1">|</span>
+            <span className="text-white font-medium">Compliance Orchestration Portal</span>
+            <span className="text-blue-300 font-normal mx-1">|</span>
+            <span className="text-white font-medium">From Policy to Performance</span>
+
+          </h1>
+          
+        </div>
+
+        
       </div>
 
-      <div className="flex items-center space-x-1 sm:space-x-2 md:space-x-3 lg:space-x-4 flex-shrink-0">
-        {/* Notification Bell */}
-        <button className="relative p-1 sm:p-1.5 md:p-2 text-gray-400 hover:text-gray-600">
-          <svg
-            className="h-4 w-4 sm:h-5 sm:w-5 md:h-6 md:w-6"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth="2"
-              d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-            />
-          </svg>
-          <span className="absolute top-0 right-0 sm:top-0.5 sm:right-0.5 h-1.5 w-1.5 sm:h-2 sm:w-2 bg-red-500 rounded-full"></span>
-        </button>
+      {/* Center - Date and Time */}
+      <div className="hidden sm:block text-center flex-1">
+        <p className="text-xs sm:text-sm font-medium text-white">
+          {formatDate(currentDateTime)}
+          <span className="text-blue-300 mx-2">|</span>
+          <span className="text-blue-200 font-semibold">{formatTime(currentDateTime)}</span>
+        </p>
+      </div>
 
-        {/* User Profile */}
+      {/* Right - User Info */}
+      <div className="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
+        {/* Role Badge */}
+        <div className="hidden xs:block">
+          <span
+            className={`px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full ${getRoleBadge(profile?.role)}`}
+          >
+            {getRoleDisplayName(profile?.role)} View
+          </span>
+        </div>
+
+        {/* User Profile Dropdown */}
         <div className="relative" ref={dropdownRef}>
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center space-x-1 sm:space-x-2 md:space-x-3 focus:outline-none"
+            className="flex items-center space-x-1 sm:space-x-2 focus:outline-none hover:bg-white/10 rounded-lg px-1 sm:px-2 py-1 transition-colors"
           >
-            <div className="h-6 w-6 sm:h-7 sm:w-7 md:h-8 md:w-8 rounded-full bg-[#8cc63e] flex items-center justify-center text-white font-medium text-xs sm:text-sm">
+            <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-medium text-xs shadow-md">
               {getDisplayName().charAt(0).toUpperCase()}
             </div>
             <div className="hidden xs:block text-left">
-              <p className="text-xs sm:text-sm font-medium text-gray-700 truncate max-w-[60px] sm:max-w-[100px] md:max-w-[150px]">
+              <p className="text-xs sm:text-sm font-medium text-white truncate max-w-[60px] sm:max-w-[100px]">
                 {getDisplayName()}
-              </p>
-              <p className="text-[8px] sm:text-[10px] md:text-xs text-gray-500 truncate max-w-[60px] sm:max-w-[100px] md:max-w-[150px]">
-                {profile?.email || ""}
               </p>
             </div>
             <svg
-              className="h-3 w-3 sm:h-3.5 sm:w-3.5 md:h-4 md:w-4 text-gray-400"
+              className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-blue-300"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -104,9 +146,9 @@ const Header = () => {
 
           {/* Dropdown */}
           {isDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-48 sm:w-56 md:w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-50">
-              <div className="px-3 sm:px-4 py-2 sm:py-3 border-b">
-                <p className="text-xs sm:text-sm font-medium text-gray-900 truncate">
+            <div className="absolute right-0 mt-2 w-48 sm:w-56 bg-white rounded-lg shadow-xl border border-gray-100 py-2 z-50 animate-slideDown">
+              <div className="px-3 sm:px-4 py-2 sm:py-3 border-b border-gray-100">
+                <p className="text-xs sm:text-sm font-semibold text-gray-900 truncate">
                   {getDisplayName()}
                 </p>
                 <p className="text-[10px] sm:text-xs text-gray-500 truncate">{profile?.email}</p>
@@ -120,24 +162,39 @@ const Header = () => {
               <div className="py-1">
                 <Link
                   to="/profile"
-                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-gray-100"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
                 >
-                  Your Profile
+                  <span className="flex items-center">
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                    </svg>
+                    Your Profile
+                  </span>
                 </Link>
                 <Link
                   to="/settings"
-                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-gray-100"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
                 >
-                  Settings
+                  <span className="flex items-center">
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                    </svg>
+                    Settings
+                  </span>
                 </Link>
               </div>
 
-              <div className="border-t">
+              <div className="border-t border-gray-100">
                 <button
                   onClick={logout}
-                  className="block w-full text-left px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-red-600 hover:bg-gray-100"
+                  className="block w-full text-left px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-red-600 hover:bg-red-50 transition-colors"
                 >
-                  Sign out
+                  <span className="flex items-center">
+                    <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    Sign out
+                  </span>
                 </button>
               </div>
             </div>
