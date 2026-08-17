@@ -426,33 +426,35 @@ const AuditHistory = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
+    <div className="space-y-4 sm:space-y-6 px-2 sm:px-3 md:px-0">
+      {/* Header - Responsive */}
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Audit History</h1>
-          <p className="text-sm text-gray-500 mt-1">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Audit History</h1>
+          <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">
             {filteredAudits.length} audits found
           </p>
         </div>
         {isAdmin && (
           <button
             onClick={() => setShowUploadModal(true)}
-            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center"
+            className="w-full sm:w-auto bg-[#8cc63e] text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center text-sm"
           >
-            <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="h-4 w-4 sm:h-5 sm:w-5 mr-1.5 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
             </svg>
-            Add Audit
+            <span className="hidden xs:inline">Add Audit</span>
+            <span className="xs:hidden">Add</span>
           </button>
         )}
       </div>
 
-      {/* Upload Modal */}
+      {/* Upload Modal - Responsive */}
       {showUploadModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                 Upload Audit File
               </h3>
               <button
@@ -466,16 +468,16 @@ const AuditHistory = () => {
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+            <div className="p-4 sm:p-6 space-y-4">
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-6 text-center">
                 <svg
-                  className="h-12 w-12 text-gray-400 mx-auto"
+                  className="h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mx-auto"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -487,10 +489,10 @@ const AuditHistory = () => {
                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
                   />
                 </svg>
-                <p className="mt-2 text-sm text-gray-600">
+                <p className="mt-2 text-xs sm:text-sm text-gray-600">
                   Upload audit document (PDF, Word, Excel, or Image)
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
                   Max file size: 50MB
                 </p>
                 <input
@@ -498,33 +500,33 @@ const AuditHistory = () => {
                   type="file"
                   onChange={handleFileUpload}
                   disabled={uploading}
-                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                  className="mt-3 sm:mt-4 block w-full text-xs sm:text-sm text-gray-500 file:mr-2 sm:file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-md file:border-0 file:text-xs sm:file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
                 />
                 {uploadError && (
-                  <div className="mt-2 text-sm text-red-600 break-words">
+                  <div className="mt-2 text-xs sm:text-sm text-red-600 break-words">
                     {uploadError}
                   </div>
                 )}
                 {selectedFile && (
-                  <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-sm text-green-700 font-medium break-words">
+                  <div className="mt-3 p-2 sm:p-3 bg-green-50 rounded-lg border border-green-200">
+                    <p className="text-xs sm:text-sm text-green-700 font-medium break-words">
                       File selected: {selectedFile.name}
                     </p>
-                    <p className="text-xs text-green-600">
+                    <p className="text-[10px] sm:text-xs text-green-600">
                       Size: {(selectedFile.size / 1024).toFixed(1)} KB
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-[10px] text-gray-500 mt-1 break-words">
                       Will be saved as: CMCC 2025-2026_{new Date().getTime()}_{selectedFile.name}
                     </p>
                   </div>
                 )}
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              <div className="flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3 pt-2 sm:pt-4">
                 <button
                   onClick={uploadAuditFile}
                   disabled={uploading || !selectedFile}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
                   {uploading ? (
                     <>
@@ -547,7 +549,7 @@ const AuditHistory = () => {
                       fileInputRef.current.value = "";
                     }
                   }}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
                 >
                   Cancel
                 </button>
@@ -557,12 +559,12 @@ const AuditHistory = () => {
         </div>
       )}
 
-      {/* Edit File Modal */}
+      {/* Edit File Modal - Responsive */}
       {showEditModal && editingFile && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                 Update Audit File
               </h3>
               <button
@@ -577,24 +579,24 @@ const AuditHistory = () => {
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-4">
               <div>
-                <p className="text-sm text-gray-500">Current File</p>
-                <p className="font-medium text-gray-900 break-words">{editingFile.displayName}</p>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs sm:text-sm text-gray-500">Current File</p>
+                <p className="font-medium text-gray-900 break-words text-sm sm:text-base">{editingFile.displayName}</p>
+                <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
                   Size: {formatFileSize(editingFile.metadata?.size || 0)}
                 </p>
               </div>
 
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
+              <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-6 text-center">
                 <svg
-                  className="h-12 w-12 text-gray-400 mx-auto"
+                  className="h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mx-auto"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -606,10 +608,10 @@ const AuditHistory = () => {
                     d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
                   />
                 </svg>
-                <p className="mt-2 text-sm text-gray-600">
+                <p className="mt-2 text-xs sm:text-sm text-gray-600">
                   Select new file to replace the current one
                 </p>
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
                   Max file size: 50MB
                 </p>
                 <input
@@ -617,30 +619,30 @@ const AuditHistory = () => {
                   type="file"
                   onChange={handleEditFileSelect}
                   disabled={updatingFile}
-                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                  className="mt-3 sm:mt-4 block w-full text-xs sm:text-sm text-gray-500 file:mr-2 sm:file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-md file:border-0 file:text-xs sm:file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
                 />
                 {editFileError && (
-                  <div className="mt-2 text-sm text-red-600 break-words">
+                  <div className="mt-2 text-xs sm:text-sm text-red-600 break-words">
                     {editFileError}
                   </div>
                 )}
                 {editFile && (
-                  <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-sm text-green-700 font-medium break-words">
+                  <div className="mt-3 p-2 sm:p-3 bg-green-50 rounded-lg border border-green-200">
+                    <p className="text-xs sm:text-sm text-green-700 font-medium break-words">
                       New file selected: {editFile.name}
                     </p>
-                    <p className="text-xs text-green-600">
+                    <p className="text-[10px] sm:text-xs text-green-600">
                       Size: {(editFile.size / 1024).toFixed(1)} KB
                     </p>
                   </div>
                 )}
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              <div className="flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3 pt-2 sm:pt-4">
                 <button
                   onClick={updateAuditFile}
                   disabled={updatingFile || !editFile}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
                   {updatingFile ? (
                     <>
@@ -664,7 +666,7 @@ const AuditHistory = () => {
                       editFileInputRef.current.value = "";
                     }
                   }}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
                 >
                   Cancel
                 </button>
@@ -674,23 +676,23 @@ const AuditHistory = () => {
         </div>
       )}
 
-      {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {/* Filters - Responsive */}
+      <div className="bg-white rounded-lg shadow p-3 sm:p-4">
+        <div className="grid grid-cols-1 xs:grid-cols-2 gap-2 sm:gap-4">
           <div>
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by department, policy, or CFT member..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              placeholder="Search..."
+              className="w-full px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             />
           </div>
           <div>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              className="w-full px-2 sm:px-3 py-1.5 sm:py-2 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               <option value="all">All Statuses</option>
               <option value="Open">Open</option>
@@ -702,22 +704,22 @@ const AuditHistory = () => {
         </div>
       </div>
 
-      {/* Audit Files Section */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-          <div className="flex items-center gap-4 flex-wrap">
-            <h3 className="text-lg font-semibold text-gray-900">
+      {/* Audit Files Section - Responsive */}
+      <div className="bg-white rounded-lg shadow p-3 sm:p-4">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-3 sm:mb-4 gap-2">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4">
+            <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
               Audit Files - CMCC 2025-2026
             </h3>
-            <div className="flex items-center gap-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3 text-xs sm:text-sm">
               <span className="text-gray-600">
                 Total: <span className="font-semibold text-gray-900">{stats.total}</span>
               </span>
-              <span className="text-gray-300">|</span>
+              <span className="text-gray-300 hidden xs:inline">|</span>
               <span className="text-yellow-600">
                 Open: <span className="font-semibold">{stats.open}</span>
               </span>
-              <span className="text-gray-300">|</span>
+              <span className="text-gray-300 hidden xs:inline">|</span>
               <span className="text-green-600">
                 Closed: <span className="font-semibold">{stats.closed}</span>
               </span>
@@ -726,9 +728,9 @@ const AuditHistory = () => {
           {isAdmin && (
             <button
               onClick={() => setShowUploadModal(true)}
-              className="text-[#8cc63e] hover:text-[#7ab52e] text-sm font-medium flex items-center"
+              className="text-[#8cc63e] hover:text-[#7ab52e] text-xs sm:text-sm font-medium flex items-center"
             >
-              <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
               </svg>
               Upload New
@@ -739,61 +741,61 @@ const AuditHistory = () => {
         {loadingFiles ? (
           <div className="text-center py-4">
             <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#8cc63e] mx-auto"></div>
-            <p className="mt-2 text-sm text-gray-500">Loading files...</p>
+            <p className="mt-2 text-xs sm:text-sm text-gray-500">Loading files...</p>
           </div>
         ) : auditFiles.length === 0 ? (
-          <div className="text-center py-8">
-            <svg className="h-12 w-12 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="text-center py-6 sm:py-8">
+            <svg className="h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mx-auto mb-3 sm:mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
-            <p className="text-sm text-gray-500">No audit files uploaded yet</p>
+            <p className="text-xs sm:text-sm text-gray-500">No audit files uploaded yet</p>
             {isAdmin && (
               <button
                 onClick={() => setShowUploadModal(true)}
-                className="mt-2 text-[#8cc63e] hover:text-[#7ab52e] text-sm font-medium"
+                className="mt-2 text-[#8cc63e] hover:text-[#7ab52e] text-xs sm:text-sm font-medium"
               >
                 Upload your first file
               </button>
             )}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
             {auditFiles.map((file) => (
               <div
                 key={file.id}
-                className="border border-gray-200 rounded-lg p-4 hover:shadow-md transition-shadow"
+                className="border border-gray-200 rounded-lg p-3 sm:p-4 hover:shadow-md transition-shadow"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center">
-                      <svg className="h-8 w-8 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="h-6 w-6 sm:h-8 sm:w-8 text-gray-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                       </svg>
-                      <div className="ml-3 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">
+                      <div className="ml-2 sm:ml-3 min-w-0">
+                        <p className="text-xs sm:text-sm font-medium text-gray-900 truncate">
                           CMCC 2025-2026
                         </p>
-                        <p className="text-xs text-gray-500 truncate">
+                        <p className="text-[10px] sm:text-xs text-gray-500 truncate">
                           {file.name}
                         </p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-xs text-gray-500">
+                        <div className="flex flex-wrap items-center gap-1 sm:gap-2 mt-0.5 sm:mt-1">
+                          <span className="text-[10px] sm:text-xs text-gray-500">
                             {formatFileSize(file.metadata?.size || 0)}
                           </span>
-                          <span className="text-xs text-gray-500">
+                          <span className="text-[10px] sm:text-xs text-gray-500">
                             {formatDate(file.created_at)}
                           </span>
                         </div>
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                  <div className="flex items-center gap-0.5 sm:gap-1 ml-1 sm:ml-2 flex-shrink-0">
                     <button
                       onClick={() => handleFileDownload(file)}
-                      className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
+                      className="p-1 sm:p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded transition-colors"
                       title="Download file"
                     >
-                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
                     </button>
@@ -801,19 +803,19 @@ const AuditHistory = () => {
                       <>
                         <button
                           onClick={() => openEditModal(file)}
-                          className="p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded transition-colors"
+                          className="p-1 sm:p-1.5 text-indigo-600 hover:text-indigo-800 hover:bg-indigo-50 rounded transition-colors"
                           title="Update file"
                         >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                           </svg>
                         </button>
                         <button
                           onClick={() => handleFileDelete(file)}
-                          className="p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
+                          className="p-1 sm:p-1.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded transition-colors"
                           title="Delete file"
                         >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="h-3.5 w-3.5 sm:h-4 sm:w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                           </svg>
                         </button>
@@ -827,13 +829,14 @@ const AuditHistory = () => {
         )}
       </div>
 
+      {/* No audits found */}
       {filteredAudits.length === 0 && (
-        <div className="bg-white rounded-lg shadow p-12 text-center">
-          <svg className="h-16 w-16 text-gray-400 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="bg-white rounded-lg shadow p-8 sm:p-12 text-center">
+          <svg className="h-12 w-12 sm:h-16 sm:w-16 text-gray-400 mx-auto mb-3 sm:mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l3 3 3-3" />
           </svg>
-          <h3 className="text-lg font-medium text-gray-900">No audits found</h3>
-          <p className="mt-2 text-sm text-gray-500">
+          <h3 className="text-base sm:text-lg font-medium text-gray-900">No audits found</h3>
+          <p className="mt-1 sm:mt-2 text-xs sm:text-sm text-gray-500">
             {searchTerm || filterStatus !== "all"
               ? "No audits match your search criteria."
               : "No audit records have been created yet."}
@@ -841,94 +844,94 @@ const AuditHistory = () => {
         </div>
       )}
 
-      {/* Audit Detail Modal */}
+      {/* Audit Detail Modal - Responsive */}
       {showModal && selectedAudit && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-xl font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center">
+              <h3 className="text-base sm:text-lg md:text-xl font-semibold text-gray-900">
                 Audit Details
               </h3>
               <button
                 onClick={() => setShowModal(false)}
                 className="text-gray-400 hover:text-gray-600"
               >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
-            <div className="p-6 space-y-6">
+            <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
               <div>
-                <h4 className="text-sm font-medium text-gray-500">Policy Reference</h4>
-                <p className="mt-1 text-gray-900 font-semibold">{selectedAudit.policy_reference}</p>
+                <h4 className="text-xs sm:text-sm font-medium text-gray-500">Policy Reference</h4>
+                <p className="mt-1 text-gray-900 font-semibold text-sm sm:text-base">{selectedAudit.policy_reference}</p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 xs:grid-cols-2 gap-3 sm:gap-4">
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">Department</h4>
-                  <p className="mt-1 text-gray-900">{selectedAudit.department}</p>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">Department</h4>
+                  <p className="mt-1 text-gray-900 text-sm sm:text-base">{selectedAudit.department}</p>
                 </div>
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">CFT Member</h4>
-                  <p className="mt-1 text-gray-900">{selectedAudit.relevant_cft_member}</p>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">CFT Member</h4>
+                  <p className="mt-1 text-gray-900 text-sm sm:text-base">{selectedAudit.relevant_cft_member}</p>
                 </div>
               </div>
 
               <div>
-                <h4 className="text-sm font-medium text-gray-500">Check Point</h4>
-                <div className="mt-1 p-4 bg-gray-50 rounded-lg">
-                  <p className="text-gray-700 whitespace-pre-wrap">{selectedAudit.check_point}</p>
+                <h4 className="text-xs sm:text-sm font-medium text-gray-500">Check Point</h4>
+                <div className="mt-1 p-3 sm:p-4 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{selectedAudit.check_point}</p>
                 </div>
               </div>
 
               <div>
-                <h4 className="text-sm font-medium text-gray-500">Observation</h4>
-                <div className="mt-1 p-4 bg-yellow-50 rounded-lg border border-yellow-200">
-                  <p className="text-gray-700 whitespace-pre-wrap">{selectedAudit.observation}</p>
+                <h4 className="text-xs sm:text-sm font-medium text-gray-500">Observation</h4>
+                <div className="mt-1 p-3 sm:p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{selectedAudit.observation}</p>
                 </div>
               </div>
 
               <div>
-                <h4 className="text-sm font-medium text-gray-500">Rectification Plan</h4>
-                <div className="mt-1 p-4 bg-green-50 rounded-lg border border-green-200">
-                  <p className="text-gray-700 whitespace-pre-wrap">{selectedAudit.rectification_plan}</p>
+                <h4 className="text-xs sm:text-sm font-medium text-gray-500">Rectification Plan</h4>
+                <div className="mt-1 p-3 sm:p-4 bg-green-50 rounded-lg border border-green-200">
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap">{selectedAudit.rectification_plan}</p>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 xs:grid-cols-3 gap-3 sm:gap-4">
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">Status</h4>
-                  <span className={`mt-1 inline-block px-2 py-1 text-xs font-medium rounded-full ${getStatusBadge(selectedAudit.status)}`}>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">Status</h4>
+                  <span className={`mt-1 inline-block px-2 py-1 text-[10px] sm:text-xs font-medium rounded-full ${getStatusBadge(selectedAudit.status)}`}>
                     {selectedAudit.status}
                   </span>
                 </div>
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">Created</h4>
-                  <p className="mt-1 text-gray-900">{formatDate(selectedAudit.created_at)}</p>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">Created</h4>
+                  <p className="mt-1 text-gray-900 text-sm sm:text-base">{formatDate(selectedAudit.created_at)}</p>
                 </div>
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">Last Updated</h4>
-                  <p className="mt-1 text-gray-900">{formatDate(selectedAudit.updated_at)}</p>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">Last Updated</h4>
+                  <p className="mt-1 text-gray-900 text-sm sm:text-base">{formatDate(selectedAudit.updated_at)}</p>
                 </div>
               </div>
 
               {selectedAudit.comments && (
                 <div>
-                  <h4 className="text-sm font-medium text-gray-500">Comments</h4>
-                  <p className="mt-1 text-gray-700">{selectedAudit.comments}</p>
+                  <h4 className="text-xs sm:text-sm font-medium text-gray-500">Comments</h4>
+                  <p className="mt-1 text-gray-700 text-sm sm:text-base">{selectedAudit.comments}</p>
                 </div>
               )}
 
               {isAdmin && (
-                <div className="pt-4 border-t border-gray-200">
+                <div className="pt-3 sm:pt-4 border-t border-gray-200">
                   <button
                     onClick={() => {
                       setShowModal(false);
                       openStatusModal(selectedAudit);
                     }}
-                    className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors"
+                    className="w-full sm:w-auto bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors text-sm"
                   >
                     Change Status
                   </button>
@@ -939,12 +942,12 @@ const AuditHistory = () => {
         </div>
       )}
 
-      {/* Change Status Modal - Only for Admin */}
+      {/* Change Status Modal - Responsive */}
       {showStatusModal && statusAudit && isAdmin && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-md max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                 Change Status
               </h3>
               <button
@@ -955,27 +958,27 @@ const AuditHistory = () => {
                 }}
                 className="text-gray-400 hover:text-gray-600"
               >
-                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="h-5 w-5 sm:h-6 sm:w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-4 sm:p-6 space-y-4">
               <div>
-                <p className="text-sm text-gray-500">Audit</p>
-                <p className="font-medium text-gray-900">{statusAudit.policy_reference}</p>
+                <p className="text-xs sm:text-sm text-gray-500">Audit</p>
+                <p className="font-medium text-gray-900 text-sm sm:text-base">{statusAudit.policy_reference}</p>
               </div>
 
               <div>
-                <p className="text-sm text-gray-500">Current Status</p>
-                <span className={`inline-block px-2 py-1 text-xs font-medium rounded-full ${getStatusBadge(statusAudit.status)}`}>
+                <p className="text-xs sm:text-sm text-gray-500">Current Status</p>
+                <span className={`inline-block px-2 py-1 text-[10px] sm:text-xs font-medium rounded-full ${getStatusBadge(statusAudit.status)}`}>
                   {statusAudit.status}
                 </span>
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-2">
                   New Status
                 </label>
                 <div className="grid grid-cols-2 gap-2">
@@ -983,7 +986,7 @@ const AuditHistory = () => {
                     <button
                       key={status}
                       onClick={() => setSelectedStatus(status)}
-                      className={`px-4 py-2 rounded-md border-2 transition-colors ${
+                      className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md border-2 transition-colors text-xs sm:text-sm ${
                         selectedStatus === status
                           ? `border-[#8cc63e] bg-[#8cc63e]/10 ${getStatusColor(status)}`
                           : "border-gray-200 text-gray-600 hover:border-gray-300"
@@ -996,7 +999,7 @@ const AuditHistory = () => {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
                   Comments (Optional)
                 </label>
                 <textarea
@@ -1004,15 +1007,15 @@ const AuditHistory = () => {
                   onChange={(e) => setStatusComment(e.target.value)}
                   placeholder="Add a comment about this status change..."
                   rows="3"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                  className="w-full px-3 py-2 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                 />
               </div>
 
-              <div className="flex space-x-3 pt-4">
+              <div className="flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3 pt-2 sm:pt-4">
                 <button
                   onClick={handleStatusUpdate}
                   disabled={updatingStatus || !selectedStatus}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
                   {updatingStatus ? (
                     <>
@@ -1032,7 +1035,7 @@ const AuditHistory = () => {
                     setStatusAudit(null);
                     setStatusComment("");
                   }}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
                 >
                   Cancel
                 </button>
