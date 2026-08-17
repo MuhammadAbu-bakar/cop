@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { getObligations } from "../../api/compliance";
 import { supabase } from "../../api/supabase";
@@ -17,7 +17,7 @@ const ComplianceRegister = () => {
   const [filterFrequency, setFilterFrequency] = useState("all");
   const [filterDomain, setFilterDomain] = useState("all");
   const [hoveredObligation, setHoveredObligation] = useState(null);
-  const [activeTab, setActiveTab] = useState("cyclic"); // "cyclic" or "event"
+  const [activeTab, setActiveTab] = useState("Cyclic");
 
   // Add Modal States
   const [showAddModal, setShowAddModal] = useState(false);
@@ -44,8 +44,20 @@ const ComplianceRegister = () => {
     compliance_weight: 1,
     current_status: "Not Started",
     region: "",
-    obligation_type: "cyclic", // "cyclic" or "event"
+    obligation_type: "Cyclic",
   });
+
+  // Event template options
+  const [eventTemplates, setEventTemplates] = useState([]);
+  const [selectedTemplate, setSelectedTemplate] = useState(null);
+  
+  // Obligation name options for dropdown
+  const [obligationNameOptions, setObligationNameOptions] = useState([]);
+  const [filteredNameOptions, setFilteredNameOptions] = useState([]);
+  const [nameSearchTerm, setNameSearchTerm] = useState("");
+  const [showNameDropdown, setShowNameDropdown] = useState(false);
+  const nameInputRef = useRef(null);
+  const nameDropdownRef = useRef(null);
 
   // Edit Modal States
   const [showEditModal, setShowEditModal] = useState(false);
@@ -66,7 +78,7 @@ const ComplianceRegister = () => {
     mandatory: false,
     compliance_weight: 1,
     current_status: "",
-    obligation_type: "cyclic",
+    obligation_type: "Cyclic",
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState("");
@@ -93,12 +105,37 @@ const ComplianceRegister = () => {
   useEffect(() => {
     fetchObligations();
     fetchPolicies();
+    fetchEventTemplates();
+    fetchObligationNameOptions();
+  }, []);
+
+  // Click outside handler for name dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (
+        nameDropdownRef.current && 
+        !nameDropdownRef.current.contains(event.target) &&
+        nameInputRef.current &&
+        !nameInputRef.current.contains(event.target)
+      ) {
+        setShowNameDropdown(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
   }, []);
 
   const fetchObligations = async () => {
     setLoading(true);
     try {
-      const { data, error } = await getObligations();
+      const { data, error } = await supabase
+        .from("obligations")
+        .select("*")
+        .order("created_at", { ascending: false });
+
       if (!error && data) {
         setObligations(data);
       }
@@ -120,6 +157,39 @@ const ComplianceRegister = () => {
       }
     } catch (error) {
       console.error("Error fetching policies:", error);
+    }
+  };
+
+  const fetchEventTemplates = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("event_templates")
+        .select("*")
+        .order("name");
+      if (!error && data) {
+        setEventTemplates(data);
+      }
+    } catch (error) {
+      console.error("Error fetching event templates:", error);
+    }
+  };
+
+  const fetchObligationNameOptions = async () => {
+    try {
+      // Fetch distinct obligation names from the database
+      const { data, error } = await supabase
+        .from("obligations")
+        .select("name")
+        .order("name");
+
+      if (!error && data) {
+        // Get unique names
+        const uniqueNames = [...new Set(data.map(item => item.name).filter(Boolean))];
+        setObligationNameOptions(uniqueNames);
+        setFilteredNameOptions(uniqueNames);
+      }
+    } catch (error) {
+      console.error("Error fetching obligation name options:", error);
     }
   };
 
@@ -275,6 +345,115 @@ const ComplianceRegister = () => {
     return due < today;
   };
 
+  // Fetch obligation data by name and policy
+  const fetchObligationDataByName = async (name, policyId) => {
+    if (!name || !policyId) return null;
+
+    try {
+      const { data, error } = await supabase
+        .from("obligations")
+        .select("*")
+        .eq("name", name)
+        .eq("policy_id", policyId)
+        .limit(1);
+
+      if (!error && data && data.length > 0) {
+        return data[0];
+      }
+      return null;
+    } catch (error) {
+      console.error("Error fetching obligation data:", error);
+      return null;
+    }
+  };
+
+  // Handle obligation name search/filter
+  const handleNameSearch = (searchText) => {
+    setNameSearchTerm(searchText);
+    setShowNameDropdown(true);
+    if (searchText.trim() === "") {
+      setFilteredNameOptions(obligationNameOptions);
+    } else {
+      const filtered = obligationNameOptions.filter(name =>
+        name.toLowerCase().includes(searchText.toLowerCase())
+      );
+      setFilteredNameOptions(filtered);
+    }
+  };
+
+  // Handle obligation name selection
+  const handleNameSelect = async (selectedName) => {
+    setAddFormData(prev => ({
+      ...prev,
+      name: selectedName,
+    }));
+    setNameSearchTerm(selectedName);
+    setFilteredNameOptions(obligationNameOptions);
+    setShowNameDropdown(false);
+
+    // Auto-fill other fields if policy is selected
+    if (addFormData.policy_id) {
+      const obligationData = await fetchObligationDataByName(selectedName, addFormData.policy_id);
+      if (obligationData) {
+        setAddFormData(prev => ({
+          ...prev,
+          obligation_id: obligationData.obligation_id || prev.obligation_id,
+          clause: obligationData.clause || prev.clause,
+          domain: obligationData.domain || prev.domain,
+          description: obligationData.description || prev.description,
+          responsible: obligationData.responsible || prev.responsible,
+          accountable: obligationData.accountable || prev.accountable,
+          frequency: obligationData.frequency || prev.frequency,
+          due_date_rule: obligationData.due_date_rule || prev.due_date_rule,
+          evidence_required: obligationData.evidence_required || prev.evidence_required,
+          evidence_type: obligationData.evidence_type || prev.evidence_type,
+          source_system: obligationData.source_system || prev.source_system,
+          portal_action: obligationData.portal_action || prev.portal_action,
+          manual_upload_required: obligationData.manual_upload_required || prev.manual_upload_required,
+          mandatory: obligationData.mandatory || prev.mandatory,
+          compliance_weight: obligationData.compliance_weight || prev.compliance_weight,
+          region: obligationData.region || prev.region,
+        }));
+      }
+    }
+  };
+
+  // Handle policy selection change
+  const handlePolicyChange = async (e) => {
+    const policyId = e.target.value;
+    setAddFormData(prev => ({
+      ...prev,
+      policy_id: policyId,
+    }));
+
+    // If name is already selected, auto-fill fields with new policy data
+    if (addFormData.name && policyId) {
+      const obligationData = await fetchObligationDataByName(addFormData.name, policyId);
+      if (obligationData) {
+        setAddFormData(prev => ({
+          ...prev,
+          policy_id: policyId,
+          obligation_id: obligationData.obligation_id || prev.obligation_id,
+          clause: obligationData.clause || prev.clause,
+          domain: obligationData.domain || prev.domain,
+          description: obligationData.description || prev.description,
+          responsible: obligationData.responsible || prev.responsible,
+          accountable: obligationData.accountable || prev.accountable,
+          frequency: obligationData.frequency || prev.frequency,
+          due_date_rule: obligationData.due_date_rule || prev.due_date_rule,
+          evidence_required: obligationData.evidence_required || prev.evidence_required,
+          evidence_type: obligationData.evidence_type || prev.evidence_type,
+          source_system: obligationData.source_system || prev.source_system,
+          portal_action: obligationData.portal_action || prev.portal_action,
+          manual_upload_required: obligationData.manual_upload_required || prev.manual_upload_required,
+          mandatory: obligationData.mandatory || prev.mandatory,
+          compliance_weight: obligationData.compliance_weight || prev.compliance_weight,
+          region: obligationData.region || prev.region,
+        }));
+      }
+    }
+  };
+
   // Add Functions
   const handleAddClick = (type) => {
     setAddFormData({
@@ -286,7 +465,7 @@ const ComplianceRegister = () => {
       description: "",
       responsible: "",
       accountable: "",
-      frequency: type === "cyclic" ? "Monthly" : "Event Based",
+      frequency: type === "Cyclic" ? "Monthly" : "Event Based",
       due_date_rule: "",
       evidence_required: false,
       evidence_type: "",
@@ -299,6 +478,10 @@ const ComplianceRegister = () => {
       region: "",
       obligation_type: type,
     });
+    setSelectedTemplate(null);
+    setNameSearchTerm("");
+    setFilteredNameOptions(obligationNameOptions);
+    setShowNameDropdown(false);
     setAddError("");
     setAddSuccess("");
     setShowAddModal(true);
@@ -310,6 +493,41 @@ const ComplianceRegister = () => {
       ...prev,
       [name]: type === "checkbox" ? checked : value,
     }));
+  };
+
+  // Handle template selection for event obligations
+  const handleTemplateSelect = (e) => {
+    const templateId = e.target.value;
+    if (!templateId) {
+      setSelectedTemplate(null);
+      return;
+    }
+
+    const template = eventTemplates.find(t => t.id === templateId);
+    if (template) {
+      setSelectedTemplate(template);
+      setAddFormData(prev => ({
+        ...prev,
+        obligation_id: template.obligation_id || "",
+        name: template.name || "",
+        description: template.description || "",
+        domain: template.domain || "",
+        responsible: template.responsible || "",
+        accountable: template.accountable || "",
+        frequency: template.frequency || "Event Based",
+        due_date_rule: template.due_date_rule || "",
+        evidence_required: template.evidence_required || false,
+        evidence_type: template.evidence_type || "",
+        source_system: template.source_system || "",
+        portal_action: template.portal_action || "Upload",
+        manual_upload_required: template.manual_upload_required || false,
+        mandatory: template.mandatory || false,
+        compliance_weight: template.compliance_weight || 1,
+        clause: template.clause || "",
+      }));
+      setNameSearchTerm(template.name || "");
+      setShowNameDropdown(false);
+    }
   };
 
   const generateObligationId = () => {
@@ -415,7 +633,7 @@ const ComplianceRegister = () => {
       mandatory: obligation.mandatory || false,
       compliance_weight: obligation.compliance_weight || 1,
       current_status: obligation.current_status || "Not Started",
-      obligation_type: obligation.obligation_type || "cyclic",
+      obligation_type: obligation.obligation_type || "Cyclic",
     });
     setEditError("");
     setShowEditModal(true);
@@ -547,25 +765,15 @@ const ComplianceRegister = () => {
     navigate('/compliance', { replace: true });
   };
 
-  // Filter obligations based on active tab - CORRECTED
+  // Filter obligations based on active tab using obligation_type column
   const getFilteredObligations = () => {
     let filtered = obligations;
 
-    // Filter by tab - using BOTH obligation_type AND frequency
-    if (activeTab === "cyclic") {
-      // Cyclic Based: obligation_type is "cyclic" OR null/undefined, AND frequency is NOT "Event Based"
-      filtered = filtered.filter(o => {
-        const isCyclicType = o.obligation_type === "cyclic" || o.obligation_type === null || o.obligation_type === undefined;
-        const isNotEventBased = o.frequency !== "Event Based";
-        return isCyclicType && isNotEventBased;
-      });
-    } else if (activeTab === "event") {
-      // Event Based: obligation_type is "event" OR frequency is "Event Based"
-      filtered = filtered.filter(o => {
-        const isEventType = o.obligation_type === "event";
-        const isEventFrequency = o.frequency === "Event Based";
-        return isEventType || isEventFrequency;
-      });
+    // Filter by tab using obligation_type column
+    if (activeTab === "Cyclic") {
+      filtered = filtered.filter(o => o.obligation_type === "Cyclic");
+    } else if (activeTab === "Event") {
+      filtered = filtered.filter(o => o.obligation_type === "Event");
     }
 
     // Apply search, status, frequency, domain filters
@@ -592,21 +800,13 @@ const ComplianceRegister = () => {
 
   const filteredObligations = getFilteredObligations();
 
-  // Get counts for tabs - CORRECTED
+  // Get counts for tabs using obligation_type column
   const getCyclicCount = () => {
-    return obligations.filter(o => {
-      const isCyclicType = o.obligation_type === "cyclic" || o.obligation_type === null || o.obligation_type === undefined;
-      const isNotEventBased = o.frequency !== "Event Based";
-      return isCyclicType && isNotEventBased;
-    }).length;
+    return obligations.filter(o => o.obligation_type === "Cyclic").length;
   };
 
   const getEventCount = () => {
-    return obligations.filter(o => {
-      const isEventType = o.obligation_type === "event";
-      const isEventFrequency = o.frequency === "Event Based";
-      return isEventType || isEventFrequency;
-    }).length;
+    return obligations.filter(o => o.obligation_type === "Event").length;
   };
 
   if (loading) {
@@ -621,10 +821,10 @@ const ComplianceRegister = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+    <div className="space-y-4 px-2 sm:px-3">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
             Compliance Register
           </h1>
           <p className="text-sm text-gray-500 mt-1">
@@ -647,11 +847,11 @@ const ComplianceRegister = () => {
         {isAdmin && (
           <div className="flex flex-wrap gap-2">
             <button
-              onClick={() => handleAddClick("cyclic")}
-              className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center"
+              onClick={() => handleAddClick("Cyclic")}
+              className="bg-[#8cc63e] text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center text-xs sm:text-sm"
             >
               <svg
-                className="h-5 w-5 mr-2"
+                className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -663,14 +863,15 @@ const ComplianceRegister = () => {
                   d="M12 4v16m8-8H4"
                 />
               </svg>
-              Add Cyclic Based
+              <span className="hidden xs:inline">Add Cyclic Based</span>
+              <span className="xs:hidden">Cyclic</span>
             </button>
             <button
-              onClick={() => handleAddClick("event")}
-              className="bg-orange-500 text-white px-4 py-2 rounded-md hover:bg-orange-600 transition-colors flex items-center"
+              onClick={() => handleAddClick("Event")}
+              className="bg-orange-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-orange-600 transition-colors flex items-center text-xs sm:text-sm"
             >
               <svg
-                className="h-5 w-5 mr-2"
+                className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -682,19 +883,20 @@ const ComplianceRegister = () => {
                   d="M12 4v16m8-8H4"
                 />
               </svg>
-              Add Event Based
+              <span className="hidden xs:inline">Add Event Based</span>
+              <span className="xs:hidden">Event</span>
             </button>
           </div>
         )}
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-gray-200">
-        <nav className="-mb-px flex space-x-8">
+      <div className="border-b border-gray-200 overflow-x-auto">
+        <nav className="-mb-px flex space-x-4 sm:space-x-6 min-w-max">
           <button
-            onClick={() => setActiveTab("cyclic")}
-            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === "cyclic"
+            onClick={() => setActiveTab("Cyclic")}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
+              activeTab === "Cyclic"
                 ? "border-[#8cc63e] text-[#8cc63e]"
                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
             }`}
@@ -705,9 +907,9 @@ const ComplianceRegister = () => {
             </span>
           </button>
           <button
-            onClick={() => setActiveTab("event")}
-            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors ${
-              activeTab === "event"
+            onClick={() => setActiveTab("Event")}
+            className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
+              activeTab === "Event"
                 ? "border-orange-500 text-orange-600"
                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
             }`}
@@ -720,16 +922,16 @@ const ComplianceRegister = () => {
         </nav>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-lg shadow p-4">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      {/* Filters - Responsive Grid */}
+      <div className="bg-white rounded-lg shadow p-3">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
           <div>
             <input
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by ID, name, or description..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              placeholder="Search..."
+              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             />
           </div>
           <div>
@@ -745,7 +947,7 @@ const ComplianceRegister = () => {
                 }
                 navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
               }}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               <option value="all">All Statuses</option>
               <option value="Not Started">Not Started</option>
@@ -759,7 +961,7 @@ const ComplianceRegister = () => {
             <select
               value={filterFrequency}
               onChange={(e) => setFilterFrequency(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               {getFrequencies().map((freq) => (
                 <option key={freq} value={freq}>
@@ -772,7 +974,7 @@ const ComplianceRegister = () => {
             <select
               value={filterDomain}
               onChange={(e) => setFilterDomain(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               {getDomains().map((domain) => (
                 <option key={domain} value={domain}>
@@ -784,35 +986,29 @@ const ComplianceRegister = () => {
         </div>
       </div>
 
-      {/* Table */}
+      {/* Table - Compact and Responsive */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Actions
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Obligation
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="hidden sm:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Domain
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Frequency
+                <th className="hidden md:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  Freq
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="hidden lg:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Due Date
                 </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Weight
                 </th>
               </tr>
             </thead>
@@ -829,14 +1025,14 @@ const ComplianceRegister = () => {
                     onMouseEnter={() => setHoveredObligation(obligation.id)}
                     onMouseLeave={() => setHoveredObligation(null)}
                   >
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center space-x-2">
+                    <td className="px-2 py-2 whitespace-nowrap">
+                      <div className="flex items-center space-x-1">
                         <Link
                           to={`/compliance/${obligation.obligation_id}`}
-                          className="inline-flex items-center justify-center p-2 bg-[#8cc63e] text-white rounded-md hover:bg-[#7ab83a] transition-colors"
+                          className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
                           title="View"
                         >
-                          <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
                           </svg>
@@ -845,19 +1041,19 @@ const ComplianceRegister = () => {
                           <>
                             <button
                               onClick={() => handleEditClick(obligation)}
-                              className="inline-flex items-center justify-center p-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+                              className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                               title="Edit"
                             >
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
                               </svg>
                             </button>
                             <button
                               onClick={() => handleDeleteClick(obligation)}
-                              className="inline-flex items-center justify-center p-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+                              className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
                               title="Delete"
                             >
-                              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                               </svg>
                             </button>
@@ -865,45 +1061,44 @@ const ComplianceRegister = () => {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm font-medium text-gray-900">
-                        {obligation.obligation_id}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 relative">
-                      <div className="text-sm font-medium text-gray-900">
+                    <td className="px-2 py-2 relative max-w-[100px] sm:max-w-[150px] md:max-w-[200px]">
+                      <div className="text-xs sm:text-sm font-medium text-gray-900 truncate">
                         {obligation.name}
                       </div>
-                      <div className="text-xs text-gray-500 line-clamp-1">
-                        {obligation.description?.substring(0, 100)}...
+                      <div className="text-[10px] text-gray-500 truncate hidden sm:block">
+                        {obligation.description?.substring(0, 40)}...
                       </div>
                       
                       {/* Hover Tooltip with Full Details */}
                       {hoveredObligation === obligation.id && (
-                        <div className="absolute left-0 top-full mt-1 w-96 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-4">
-                          <div className="space-y-2">
+                        <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
+                          <div className="space-y-1.5">
                             <div className="flex justify-between items-start">
-                              <h4 className="text-sm font-semibold text-gray-900">{obligation.name}</h4>
-                              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}>
+                              <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
+                              <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(obligation.current_status)}`}>
                                 {obligation.current_status}
                               </span>
                             </div>
-                            <p className="text-sm text-gray-600">{obligation.description}</p>
-                            <div className="grid grid-cols-2 gap-2 text-xs">
+                            <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
+                            <div className="grid grid-cols-2 gap-1 text-[10px]">
                               <div>
                                 <span className="font-medium text-gray-500">ID:</span>
                                 <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
+                              </div>
+                              <div>
+                                <span className="font-medium text-gray-500">Type:</span>
+                                <span className="ml-1 text-gray-700">{obligation.obligation_type}</span>
                               </div>
                               <div>
                                 <span className="font-medium text-gray-500">Domain:</span>
                                 <span className="ml-1 text-gray-700">{obligation.domain}</span>
                               </div>
                               <div>
-                                <span className="font-medium text-gray-500">Frequency:</span>
+                                <span className="font-medium text-gray-500">Freq:</span>
                                 <span className="ml-1 text-gray-700">{obligation.frequency}</span>
                               </div>
                               <div>
-                                <span className="font-medium text-gray-500">Due Date:</span>
+                                <span className="font-medium text-gray-500">Due:</span>
                                 <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
                               </div>
                               <div>
@@ -918,7 +1113,7 @@ const ComplianceRegister = () => {
                                 <span className="font-medium text-gray-500">Weight:</span>
                                 <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
                               </div>
-                              <div>
+                              <div className="col-span-2">
                                 <span className="font-medium text-gray-500">Clause:</span>
                                 <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
                               </div>
@@ -934,7 +1129,7 @@ const ComplianceRegister = () => {
                               )}
                               {obligation.mandatory && (
                                 <div className="col-span-2">
-                                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800">
+                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
                                     Mandatory
                                   </span>
                                 </div>
@@ -944,49 +1139,36 @@ const ComplianceRegister = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className="text-sm text-gray-900">
+                    <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
+                      <span className="text-xs text-gray-900">
                         {obligation.domain}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
                       <span
-                        className={`px-2 py-1 text-xs font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
+                        className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
                       >
                         {obligation.frequency}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="hidden lg:table-cell px-2 py-2 whitespace-nowrap">
                       <div className="flex items-center space-x-1">
-                        <span className={`text-sm ${dueDateColor}`}>
+                        <span className={`text-xs ${dueDateColor}`}>
                           {formatDate(dueDate)}
                         </span>
                         {isOverdue && dueDate !== "N/A" && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-800">
+                          <span className="inline-flex items-center px-1 py-0.5 rounded-full text-[9px] font-medium bg-red-100 text-red-800">
                             Overdue
-                          </span>
-                        )}
-                        {dueDate !== "N/A" && !isOverdue && (
-                          <span className="text-xs text-gray-400">
-                            (
-                            {Math.ceil(
-                              (new Date(dueDate) - new Date()) /
-                                (1000 * 60 * 60 * 24),
-                            )}{" "}
-                            days)
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
+                    <td className="px-2 py-2 whitespace-nowrap">
                       <span
-                        className={`px-2 py-1 text-xs font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
+                        className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
                       >
                         {obligation.current_status}
                       </span>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {obligation.compliance_weight}
                     </td>
                   </tr>
                 );
@@ -995,26 +1177,26 @@ const ComplianceRegister = () => {
           </table>
         </div>
         {filteredObligations.length === 0 && (
-          <div className="text-center py-8 text-gray-500">
+          <div className="text-center py-6 text-gray-500 text-sm">
             No obligations found matching your filters.
           </div>
         )}
       </div>
 
-      {/* Add New Obligation Modal - Only for Admin */}
+      {/* Add New Obligation Modal - Fully Responsive */}
       {showAddModal && isAdmin && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-gray-900">
-                Add New {addFormData.obligation_type === "cyclic" ? "Cyclic Based" : "Event Based"} Obligation
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center z-10">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
+                Add New {addFormData.obligation_type === "Cyclic" ? "Cyclic Based" : "Event Based"} Obligation
               </h3>
               <button
                 onClick={() => setShowAddModal(false)}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 p-1"
               >
                 <svg
-                  className="h-6 w-6"
+                  className="h-5 w-5 sm:h-6 sm:w-6"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -1029,19 +1211,45 @@ const ComplianceRegister = () => {
               </button>
             </div>
 
-            <form onSubmit={handleAddSubmit} className="p-6">
+            <form onSubmit={handleAddSubmit} className="p-3 sm:p-6">
               {addError && (
-                <div className="mb-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-md">
+                <div className="mb-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-md text-sm">
                   {addError}
                 </div>
               )}
               {addSuccess && (
-                <div className="mb-4 p-3 bg-green-50 text-green-700 border border-green-200 rounded-md">
+                <div className="mb-4 p-3 bg-green-50 text-green-700 border border-green-200 rounded-md text-sm">
                   {addSuccess}
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* For Event Based obligations, show template selector */}
+              {addFormData.obligation_type === "Event" && eventTemplates.length > 0 && (
+                <div className="mb-4 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-md">
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Select Template (Auto-fill fields below)
+                  </label>
+                  <select
+                    onChange={handleTemplateSelect}
+                    value={selectedTemplate?.id || ""}
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                  >
+                    <option value="">Select a template...</option>
+                    {eventTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} ({template.obligation_id})
+                      </option>
+                    ))}
+                  </select>
+                  {selectedTemplate && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Template selected: {selectedTemplate.name}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation ID *
@@ -1051,23 +1259,24 @@ const ComplianceRegister = () => {
                     name="obligation_id"
                     value={addFormData.obligation_id}
                     onChange={handleAddInputChange}
-                    placeholder="e.g., MS-027 (Auto-generated if empty)"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    placeholder="e.g., MS-027"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
-                  <p className="text-xs text-gray-500 mt-1">
-                    Leave empty to auto-generate (MS-XXX format)
+                  <p className="text-xs text-gray-500 mt-1 hidden sm:block">
+                    Leave empty to auto-generate
                   </p>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Policy
+                    Policy *
                   </label>
                   <select
                     name="policy_id"
                     value={addFormData.policy_id || ""}
-                    onChange={handleAddInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    onChange={handlePolicyChange}
+                    required
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="">Select Policy</option>
                     {policies.map((policy) => (
@@ -1076,6 +1285,51 @@ const ComplianceRegister = () => {
                       </option>
                     ))}
                   </select>
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Obligation Name *
+                  </label>
+                  <div className="relative">
+                    <input
+                      ref={nameInputRef}
+                      type="text"
+                      value={nameSearchTerm}
+                      onChange={(e) => {
+                        const value = e.target.value;
+                        setNameSearchTerm(value);
+                        handleNameSearch(value);
+                        setAddFormData(prev => ({ ...prev, name: value }));
+                      }}
+                      onFocus={() => {
+                        if (nameSearchTerm && filteredNameOptions.length > 0) {
+                          setShowNameDropdown(true);
+                        }
+                      }}
+                      placeholder="Type to search..."
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    />
+                    {showNameDropdown && filteredNameOptions.length > 0 && (
+                      <div 
+                        ref={nameDropdownRef}
+                        className="absolute z-10 w-full mt-1 bg-white border border-gray-300 rounded-md shadow-lg max-h-40 sm:max-h-60 overflow-y-auto"
+                      >
+                        {filteredNameOptions.map((name, index) => (
+                          <div
+                            key={index}
+                            className="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm"
+                            onClick={() => handleNameSelect(name)}
+                          >
+                            {name}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Start typing to search existing obligation names
+                  </p>
                 </div>
 
                 <div>
@@ -1089,7 +1343,7 @@ const ComplianceRegister = () => {
                     onChange={handleAddInputChange}
                     required
                     placeholder="e.g., 3.x"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1104,26 +1358,11 @@ const ComplianceRegister = () => {
                     onChange={handleAddInputChange}
                     required
                     placeholder="e.g., Audit, Preventive Maintenance"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
-                <div className="col-span-2">
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Obligation Name *
-                  </label>
-                  <input
-                    type="text"
-                    name="name"
-                    value={addFormData.name}
-                    onChange={handleAddInputChange}
-                    required
-                    placeholder="Enter obligation name"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-                  />
-                </div>
-
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Description
                   </label>
@@ -1131,9 +1370,9 @@ const ComplianceRegister = () => {
                     name="description"
                     value={addFormData.description}
                     onChange={handleAddInputChange}
-                    rows="3"
+                    rows="2 sm:rows-3"
                     placeholder="Enter description"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1148,7 +1387,7 @@ const ComplianceRegister = () => {
                     onChange={handleAddInputChange}
                     required
                     placeholder="e.g., CMPak Regional Team"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1163,7 +1402,7 @@ const ComplianceRegister = () => {
                     onChange={handleAddInputChange}
                     required
                     placeholder="e.g., Regional Manager"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1176,15 +1415,16 @@ const ComplianceRegister = () => {
                     value={addFormData.frequency}
                     onChange={handleAddInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    {addFormData.obligation_type === "cyclic" ? (
+                    {addFormData.obligation_type === "Cyclic" ? (
                       <>
                         <option value="Monthly">Monthly</option>
                         <option value="Quarterly">Quarterly</option>
                         <option value="Yearly">Yearly</option>
                         <option value="Annual">Annual</option>
                         <option value="Bi-Annual">Bi-Annual</option>
+                        <option value="Continuous">Continuous</option>
                       </>
                     ) : (
                       <option value="Event Based">Event Based</option>
@@ -1201,8 +1441,8 @@ const ComplianceRegister = () => {
                     name="due_date_rule"
                     value={addFormData.due_date_rule}
                     onChange={handleAddInputChange}
-                    placeholder="e.g., End of Month, Within 7 Days"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    placeholder="e.g., End of Month"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1216,7 +1456,7 @@ const ComplianceRegister = () => {
                     value={addFormData.region}
                     onChange={handleAddInputChange}
                     placeholder="e.g., North America"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1229,7 +1469,7 @@ const ComplianceRegister = () => {
                     value={addFormData.current_status}
                     onChange={handleAddInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="Not Started">Not Started</option>
                     <option value="Pending">Pending</option>
@@ -1250,7 +1490,7 @@ const ComplianceRegister = () => {
                     onChange={handleAddInputChange}
                     min="1"
                     max="10"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1263,8 +1503,8 @@ const ComplianceRegister = () => {
                     name="evidence_type"
                     value={addFormData.evidence_type}
                     onChange={handleAddInputChange}
-                    placeholder="e.g., PDF, Excel, Photos"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    placeholder="e.g., PDF, Excel"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1278,7 +1518,7 @@ const ComplianceRegister = () => {
                     value={addFormData.source_system}
                     onChange={handleAddInputChange}
                     placeholder="e.g., Compliance Portal"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1290,7 +1530,7 @@ const ComplianceRegister = () => {
                     name="portal_action"
                     value={addFormData.portal_action}
                     onChange={handleAddInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="Upload">Upload</option>
                     <option value="Integrate">Integrate</option>
@@ -1298,8 +1538,8 @@ const ComplianceRegister = () => {
                   </select>
                 </div>
 
-                <div className="col-span-2">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <div className="grid grid-cols-1 xs:grid-cols-3 gap-3">
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -1321,7 +1561,7 @@ const ComplianceRegister = () => {
                         className="h-4 w-4 text-[#8cc63e] focus:ring-[#8cc63e] border-gray-300 rounded"
                       />
                       <label className="ml-2 text-sm text-gray-700">
-                        Manual Upload Required
+                        Manual Upload
                       </label>
                     </div>
                     <div className="flex items-center">
@@ -1340,11 +1580,11 @@ const ComplianceRegister = () => {
                 </div>
               </div>
 
-              <div className="mt-6 flex space-x-3">
+              <div className="mt-4 sm:mt-6 flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3">
                 <button
                   type="submit"
                   disabled={addLoading}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full xs:flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   {addLoading ? (
                     <>
@@ -1377,7 +1617,7 @@ const ComplianceRegister = () => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="w-full xs:flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm sm:text-base"
                 >
                   Cancel
                 </button>
@@ -1389,18 +1629,18 @@ const ComplianceRegister = () => {
 
       {/* Edit Modal - Only for Admin */}
       {showEditModal && editingObligation && isAdmin && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex justify-between items-center">
-              <h3 className="text-lg font-semibold text-gray-900">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center z-10">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900">
                 Edit Obligation - {editingObligation.obligation_id}
               </h3>
               <button
                 onClick={() => setShowEditModal(false)}
-                className="text-gray-400 hover:text-gray-600"
+                className="text-gray-400 hover:text-gray-600 p-1"
               >
                 <svg
-                  className="h-6 w-6"
+                  className="h-5 w-5 sm:h-6 sm:w-6"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -1415,14 +1655,14 @@ const ComplianceRegister = () => {
               </button>
             </div>
 
-            <form onSubmit={handleEditSubmit} className="p-6">
+            <form onSubmit={handleEditSubmit} className="p-3 sm:p-6">
               {editError && (
-                <div className="mb-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-md">
+                <div className="mb-4 p-3 bg-red-50 text-red-700 border border-red-200 rounded-md text-sm">
                   {editError}
                 </div>
               )}
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation Name *
@@ -1433,7 +1673,7 @@ const ComplianceRegister = () => {
                     value={editFormData.name}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1447,11 +1687,11 @@ const ComplianceRegister = () => {
                     value={editFormData.domain}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
-                <div className="col-span-2">
+                <div className="sm:col-span-2">
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Description
                   </label>
@@ -1459,8 +1699,8 @@ const ComplianceRegister = () => {
                     name="description"
                     value={editFormData.description}
                     onChange={handleEditInputChange}
-                    rows="3"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    rows="2 sm:rows-3"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1473,9 +1713,9 @@ const ComplianceRegister = () => {
                     value={editFormData.frequency}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    {editFormData.obligation_type === "cyclic" ? (
+                    {editFormData.obligation_type === "Cyclic" ? (
                       <>
                         <option value="Monthly">Monthly</option>
                         <option value="Quarterly">Quarterly</option>
@@ -1499,8 +1739,8 @@ const ComplianceRegister = () => {
                     name="due_date_rule"
                     value={editFormData.due_date_rule}
                     onChange={handleEditInputChange}
-                    placeholder="e.g., End of Month, Within 7 Days"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    placeholder="e.g., End of Month"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1514,7 +1754,7 @@ const ComplianceRegister = () => {
                     value={editFormData.responsible}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1528,7 +1768,7 @@ const ComplianceRegister = () => {
                     value={editFormData.accountable}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1541,8 +1781,8 @@ const ComplianceRegister = () => {
                     name="evidence_type"
                     value={editFormData.evidence_type}
                     onChange={handleEditInputChange}
-                    placeholder="e.g., PDF, Excel, Photos"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    placeholder="e.g., PDF, Excel"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1556,7 +1796,7 @@ const ComplianceRegister = () => {
                     value={editFormData.source_system}
                     onChange={handleEditInputChange}
                     placeholder="e.g., Compliance Portal"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
@@ -1568,7 +1808,7 @@ const ComplianceRegister = () => {
                     name="portal_action"
                     value={editFormData.portal_action}
                     onChange={handleEditInputChange}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="Upload">Upload</option>
                     <option value="Integrate">Integrate</option>
@@ -1585,7 +1825,7 @@ const ComplianceRegister = () => {
                     value={editFormData.current_status}
                     onChange={handleEditInputChange}
                     required
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="Not Started">Not Started</option>
                     <option value="Pending">Pending</option>
@@ -1606,12 +1846,12 @@ const ComplianceRegister = () => {
                     onChange={handleEditInputChange}
                     min="1"
                     max="10"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                 </div>
 
-                <div className="col-span-2">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <div className="grid grid-cols-1 xs:grid-cols-3 gap-3">
                     <div className="flex items-center">
                       <input
                         type="checkbox"
@@ -1633,7 +1873,7 @@ const ComplianceRegister = () => {
                         className="h-4 w-4 text-[#8cc63e] focus:ring-[#8cc63e] border-gray-300 rounded"
                       />
                       <label className="ml-2 text-sm text-gray-700">
-                        Manual Upload Required
+                        Manual Upload
                       </label>
                     </div>
                     <div className="flex items-center">
@@ -1652,11 +1892,11 @@ const ComplianceRegister = () => {
                 </div>
               </div>
 
-              <div className="mt-6 flex space-x-3">
+              <div className="mt-4 sm:mt-6 flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3">
                 <button
                   type="submit"
                   disabled={editLoading}
-                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full xs:flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   {editLoading ? (
                     <>
@@ -1689,7 +1929,7 @@ const ComplianceRegister = () => {
                 <button
                   type="button"
                   onClick={() => setShowEditModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="w-full xs:flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm sm:text-base"
                 >
                   Cancel
                 </button>
@@ -1701,9 +1941,9 @@ const ComplianceRegister = () => {
 
       {/* Delete Confirmation Modal - Only for Admin */}
       {showDeleteModal && deletingObligation && isAdmin && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
-            <div className="p-6">
+            <div className="p-4 sm:p-6">
               <div className="flex items-center justify-center mb-4">
                 <div className="h-12 w-12 bg-red-100 rounded-full flex items-center justify-center">
                   <svg
@@ -1739,11 +1979,11 @@ const ComplianceRegister = () => {
                 </div>
               )}
 
-              <div className="flex space-x-3">
+              <div className="flex flex-col xs:flex-row space-y-2 xs:space-y-0 xs:space-x-3">
                 <button
                   onClick={handleDeleteConfirm}
                   disabled={deleteLoading}
-                  className="flex-1 bg-red-600 text-white py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="w-full xs:flex-1 bg-red-600 text-white py-2 rounded-md hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                 >
                   {deleteLoading ? (
                     <>
@@ -1775,7 +2015,7 @@ const ComplianceRegister = () => {
                 </button>
                 <button
                   onClick={() => setShowDeleteModal(false)}
-                  className="flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors"
+                  className="w-full xs:flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
                 >
                   Cancel
                 </button>

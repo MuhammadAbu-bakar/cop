@@ -418,7 +418,7 @@ const AuditHistory = () => {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#00008b] mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading audit history...</p>
         </div>
       </div>
@@ -437,7 +437,7 @@ const AuditHistory = () => {
         {isAdmin && (
           <button
             onClick={() => setShowUploadModal(true)}
-            className="bg-[#00008b] text-white px-4 py-2 rounded-md hover:bg-[#00006b] transition-colors flex items-center"
+            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center"
           >
             <svg className="h-5 w-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
@@ -498,7 +498,7 @@ const AuditHistory = () => {
                   type="file"
                   onChange={handleFileUpload}
                   disabled={uploading}
-                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#00008b]/10 file:text-[#00008b] hover:file:bg-[#00008b]/20"
+                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
                 />
                 {uploadError && (
                   <div className="mt-2 text-sm text-red-600 break-words">
@@ -524,7 +524,7 @@ const AuditHistory = () => {
                 <button
                   onClick={uploadAuditFile}
                   disabled={uploading || !selectedFile}
-                  className="flex-1 bg-[#00008b] text-white py-2 rounded-md hover:bg-[#00006b] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {uploading ? (
                     <>
@@ -617,7 +617,7 @@ const AuditHistory = () => {
                   type="file"
                   onChange={handleEditFileSelect}
                   disabled={updatingFile}
-                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#00008b]/10 file:text-[#00008b] hover:file:bg-[#00008b]/20"
+                  className="mt-4 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
                 />
                 {editFileError && (
                   <div className="mt-2 text-sm text-red-600 break-words">
@@ -640,7 +640,7 @@ const AuditHistory = () => {
                 <button
                   onClick={updateAuditFile}
                   disabled={updatingFile || !editFile}
-                  className="flex-1 bg-[#00008b] text-white py-2 rounded-md hover:bg-[#00006b] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {updatingFile ? (
                     <>
@@ -683,14 +683,14 @@ const AuditHistory = () => {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search by department, policy, or CFT member..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b]"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             />
           </div>
           <div>
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b]"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
             >
               <option value="all">All Statuses</option>
               <option value="Open">Open</option>
@@ -726,7 +726,7 @@ const AuditHistory = () => {
           {isAdmin && (
             <button
               onClick={() => setShowUploadModal(true)}
-              className="text-[#00008b] hover:text-[#00006b] text-sm font-medium flex items-center"
+              className="text-[#8cc63e] hover:text-[#7ab52e] text-sm font-medium flex items-center"
             >
               <svg className="h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
@@ -738,7 +738,7 @@ const AuditHistory = () => {
         
         {loadingFiles ? (
           <div className="text-center py-4">
-            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#00008b] mx-auto"></div>
+            <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#8cc63e] mx-auto"></div>
             <p className="mt-2 text-sm text-gray-500">Loading files...</p>
           </div>
         ) : auditFiles.length === 0 ? (
@@ -750,7 +750,7 @@ const AuditHistory = () => {
             {isAdmin && (
               <button
                 onClick={() => setShowUploadModal(true)}
-                className="mt-2 text-[#00008b] hover:text-[#00006b] text-sm font-medium"
+                className="mt-2 text-[#8cc63e] hover:text-[#7ab52e] text-sm font-medium"
               >
                 Upload your first file
               </button>
@@ -928,7 +928,7 @@ const AuditHistory = () => {
                       setShowModal(false);
                       openStatusModal(selectedAudit);
                     }}
-                    className="bg-[#00008b] text-white px-4 py-2 rounded-md hover:bg-[#00006b] transition-colors"
+                    className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors"
                   >
                     Change Status
                   </button>
@@ -985,7 +985,7 @@ const AuditHistory = () => {
                       onClick={() => setSelectedStatus(status)}
                       className={`px-4 py-2 rounded-md border-2 transition-colors ${
                         selectedStatus === status
-                          ? `border-[#00008b] bg-[#00008b]/10 ${getStatusColor(status)}`
+                          ? `border-[#8cc63e] bg-[#8cc63e]/10 ${getStatusColor(status)}`
                           : "border-gray-200 text-gray-600 hover:border-gray-300"
                       }`}
                     >
@@ -1004,7 +1004,7 @@ const AuditHistory = () => {
                   onChange={(e) => setStatusComment(e.target.value)}
                   placeholder="Add a comment about this status change..."
                   rows="3"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#00008b]"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                 />
               </div>
 
@@ -1012,7 +1012,7 @@ const AuditHistory = () => {
                 <button
                   onClick={handleStatusUpdate}
                   disabled={updatingStatus || !selectedStatus}
-                  className="flex-1 bg-[#00008b] text-white py-2 rounded-md hover:bg-[#00006b] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab52e] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {updatingStatus ? (
                     <>

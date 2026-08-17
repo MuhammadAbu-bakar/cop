@@ -54,7 +54,7 @@ const ManagementActions = ({ actions }) => {
       <div className="overflow-x-auto -mx-3 sm:mx-0">
         <div className="min-w-[500px] sm:min-w-full">
           {/* Table Header */}
-          <div className="grid grid-cols-5 gap-1 sm:gap-2 px-3 py-2 bg-blue-100 rounded-t-lg text-xs font-medium text-gray-500 uppercase">
+          <div className="grid grid-cols-5 gap-1 sm:gap-2 px-3 py-2 bg-[#b6d981] rounded-t-lg text-xs font-medium text-gray-500 uppercase">
             <span className="col-span-1">Action</span>
             <span className="col-span-1">Region/Domain</span>
             <span className="col-span-1">Owner</span>

@@ -655,7 +655,7 @@ ${error?.message || "Unknown error"}`,
           ${
             isOpen
               ? "bg-red-500 hover:bg-red-600 rotate-90"
-              : "bg-[#00008b] hover:bg-[#00006b]"
+              : "bg-[#8cc63e] hover:bg-[#7ab52e]"
           }
           text-white
         `}
@@ -737,15 +737,13 @@ ${error?.message || "Unknown error"}`,
 
           <div
             className="
-              bg-gradient-to-r
-              from-[#00008b]
-              to-[#00006b]
               p-4
               flex
               items-center
               justify-between
               flex-shrink-0
             "
+            style={{ backgroundColor: "#8cc63e" }}
           >
 
             <div
@@ -878,7 +876,45 @@ ${error?.message || "Unknown error"}`,
               QUICK QUESTIONS
           ================================================= */}
 
-          
+          {messages.length === 1 && (
+            <div
+              className="
+                flex-shrink-0
+                p-3
+                bg-white
+                border-b
+                border-gray-100
+                overflow-x-auto
+                flex
+                gap-2
+              "
+            >
+              {quickQuestions.map((q, i) => (
+                <button
+                  key={i}
+                  onClick={() => askQuickQuestion(q)}
+                  className="
+                    text-[11px]
+                    whitespace-nowrap
+                    bg-green-50
+                    text-[#8cc63e]
+                    px-3
+                    py-1.5
+                    rounded-full
+                    border
+                    border-[#8cc63e]/20
+                    hover:bg-[#8cc63e]
+                    hover:text-white
+                    hover:border-[#8cc63e]
+                    transition-all
+                    flex-shrink-0
+                  "
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
+          )}
 
 
           {/* =================================================
@@ -926,7 +962,6 @@ ${error?.message || "Unknown error"}`,
                         "user"
 
                           ? `
-                            bg-[#00008b]
                             text-white
                             rounded-br-none
                           `
@@ -941,6 +976,11 @@ ${error?.message || "Unknown error"}`,
                           `
                       }
                     `}
+                    style={
+                      message.sender === "user"
+                        ? { backgroundColor: "#8cc63e" }
+                        : {}
+                    }
                   >
 
                     <p
@@ -1115,21 +1155,24 @@ ${error?.message || "Unknown error"}`,
                       className="
                         w-2
                         h-2
-                        bg-gray-400
                         rounded-full
                         animate-bounce
                       "
+                      style={{ 
+                        backgroundColor: "#8cc63e",
+                        animationDelay: "0ms"
+                      }}
                     />
 
                     <div
                       className="
                         w-2
                         h-2
-                        bg-gray-400
                         rounded-full
                         animate-bounce
                       "
                       style={{
+                        backgroundColor: "#8cc63e",
                         animationDelay:
                           "150ms",
                       }}
@@ -1139,11 +1182,11 @@ ${error?.message || "Unknown error"}`,
                       className="
                         w-2
                         h-2
-                        bg-gray-400
                         rounded-full
                         animate-bounce
                       "
                       style={{
+                        backgroundColor: "#8cc63e",
                         animationDelay:
                           "300ms",
                       }}
@@ -1223,7 +1266,7 @@ ${error?.message || "Unknown error"}`,
                   text-sm
                   focus:outline-none
                   focus:ring-2
-                  focus:ring-[#00008b]
+                  focus:ring-[#8cc63e]
                   focus:border-transparent
                 "
 
@@ -1249,12 +1292,10 @@ ${error?.message || "Unknown error"}`,
                 }
 
                 className="
-                  bg-[#00008b]
                   text-white
                   px-4
                   py-2
                   rounded-lg
-                  hover:bg-[#00006b]
                   transition-colors
                   disabled:opacity-50
                   disabled:cursor-not-allowed
@@ -1262,6 +1303,15 @@ ${error?.message || "Unknown error"}`,
                   items-center
                   justify-center
                 "
+                style={{ 
+                  backgroundColor: "#8cc63e"
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = "#7ab52e";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = "#8cc63e";
+                }}
               >
 
                 <svg

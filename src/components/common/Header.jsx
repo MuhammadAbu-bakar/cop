@@ -1,5 +1,5 @@
 // ============================================================
-// Header.jsx - Navy blue background, full width, with COP logo
+// Header.jsx - Green background, full width, with COP logo
 // ============================================================
 
 import { useState, useRef, useEffect } from "react";
@@ -58,10 +58,10 @@ const Header = () => {
 
   const getRoleBadge = (role) => {
     const badges = {
-      admin: "bg-indigo-100 text-indigo-800",
-      management: "bg-blue-100 text-blue-800",
-      regional_user: "bg-emerald-100 text-emerald-800",
-      reviewer: "bg-amber-100 text-amber-800",
+      admin: "bg-green-100 text-green-800",
+      management: "bg-emerald-100 text-emerald-800",
+      regional_user: "bg-teal-100 text-teal-800",
+      reviewer: "bg-lime-100 text-lime-800",
     };
     return badges[role] || "bg-gray-100 text-gray-800";
   };
@@ -75,32 +75,27 @@ const Header = () => {
   return (
     <header 
       className="h-12 sm:h-14 flex items-center justify-between px-3 sm:px-4 md:px-6 fixed top-0 left-0 right-0 z-20 ml-0 md:ml-16 lg:ml-20"
-      style={{ backgroundColor: "#00008b" }}
+      style={{ backgroundColor: "#8cc63e" }}
     >
       {/* Left - COP Logo and Title */}
       <div className="flex items-center space-x-2 min-w-0 flex-shrink-0">
-        {/* Removed hidden xs:block - now always visible */}
         <div className="block">
           <h1 className="text-xs sm:text-sm font-bold tracking-tight leading-tight text-white whitespace-nowrap">
             <span className="text-white text-2xl">COP</span>
-            <span className="text-blue-300 font-normal mx-1">|</span>
+            <span className="text-green-200 font-normal mx-1">|</span>
             <span className="text-white font-medium">Compliance Orchestration Portal</span>
-            <span className="text-blue-300 font-normal mx-1">|</span>
+            <span className="text-green-200 font-normal mx-1">|</span>
             <span className="text-white font-medium">From Policy to Performance</span>
-
           </h1>
-          
         </div>
-
-        
       </div>
 
       {/* Center - Date and Time */}
       <div className="hidden sm:block text-center flex-1">
         <p className="text-xs sm:text-sm font-medium text-white">
           {formatDate(currentDateTime)}
-          <span className="text-blue-300 mx-2">|</span>
-          <span className="text-blue-200 font-semibold">{formatTime(currentDateTime)}</span>
+          <span className="text-green-200 mx-2">|</span>
+          <span className="text-green-100 font-semibold">{formatTime(currentDateTime)}</span>
         </p>
       </div>
 
@@ -121,7 +116,7 @@ const Header = () => {
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
             className="flex items-center space-x-1 sm:space-x-2 focus:outline-none hover:bg-white/10 rounded-lg px-1 sm:px-2 py-1 transition-colors"
           >
-            <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white font-medium text-xs shadow-md">
+            <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white font-medium text-xs shadow-md">
               {getDisplayName().charAt(0).toUpperCase()}
             </div>
             <div className="hidden xs:block text-left">
@@ -130,7 +125,7 @@ const Header = () => {
               </p>
             </div>
             <svg
-              className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-blue-300"
+              className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-green-200"
               fill="none"
               stroke="currentColor"
               viewBox="0 0 24 24"
@@ -162,7 +157,7 @@ const Header = () => {
               <div className="py-1">
                 <Link
                   to="/profile"
-                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
                 >
                   <span className="flex items-center">
                     <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -173,7 +168,7 @@ const Header = () => {
                 </Link>
                 <Link
                   to="/settings"
-                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-blue-50 hover:text-blue-700 transition-colors"
+                  className="block px-3 sm:px-4 py-1.5 sm:py-2 text-xs sm:text-sm text-gray-700 hover:bg-green-50 hover:text-green-700 transition-colors"
                 >
                   <span className="flex items-center">
                     <svg className="h-4 w-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">

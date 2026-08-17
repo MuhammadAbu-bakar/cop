@@ -58,7 +58,7 @@ const RegionalCompliance = ({ data }) => {
       {/* Desktop Table View */}
       <div className="hidden sm:block overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-blue-100">
+          <thead className="bg-[#b6d981]">
             <tr>
               <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                 Region

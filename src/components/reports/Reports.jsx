@@ -591,7 +591,7 @@ const Reports = () => {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#00008b] mx-auto"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading report data...</p>
         </div>
       </div>
@@ -647,7 +647,7 @@ const Reports = () => {
                 <select
                   value={reportType}
                   onChange={(e) => setReportType(e.target.value)}
-                  className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                  className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                 >
                   {reports.map((report) => (
                     <option key={report.id} value={report.id}>
@@ -670,7 +670,7 @@ const Reports = () => {
                     <select
                       value={selectedDomain}
                       onChange={(e) => setSelectedDomain(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                     >
                       <option value="">All Domains</option>
                       {domains.map((domain) => (
@@ -688,7 +688,7 @@ const Reports = () => {
                     <select
                       value={selectedPolicy}
                       onChange={(e) => setSelectedPolicy(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                     >
                       <option value="">All Policies</option>
                       {policies.map((policy) => (
@@ -706,7 +706,7 @@ const Reports = () => {
                     <select
                       value={selectedClause}
                       onChange={(e) => setSelectedClause(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                     >
                       <option value="">All Clauses</option>
                       {clauses.map((clause) => (
@@ -724,7 +724,7 @@ const Reports = () => {
                     <select
                       value={selectedSubRegion}
                       onChange={(e) => setSelectedSubRegion(e.target.value)}
-                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                     >
                       <option value="">All Sub Regions</option>
                       {subRegions.map((region) => (
@@ -743,7 +743,7 @@ const Reports = () => {
                       <select
                         value={selectedMonth}
                         onChange={(e) => setSelectedMonth(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                       >
                         <option value="">All Months</option>
                         {months.map((month) => (
@@ -761,7 +761,7 @@ const Reports = () => {
                       <select
                         value={selectedYear}
                         onChange={(e) => setSelectedYear(e.target.value)}
-                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#00008b] focus:border-transparent"
+                        className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                       >
                         <option value="">All Years</option>
                         {years.map((year) => (
@@ -780,7 +780,7 @@ const Reports = () => {
                 <button
                   onClick={downloadAllDocuments}
                   disabled={downloading || allEvidence.length === 0}
-                  className="w-full bg-[#00008b] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#00006b] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
+                  className="w-full bg-[#8cc63e] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
                 >
                   {downloading ? (
                     <>
@@ -867,13 +867,13 @@ const Reports = () => {
                     </div>
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
                       <p className="text-[10px] sm:text-sm text-gray-500">Compliance Rate</p>
-                      <p className="text-lg sm:text-2xl font-bold text-[#00008b]">
+                      <p className="text-lg sm:text-2xl font-bold text-[#8cc63e]">
                         {stats.overallCompliance}%
                       </p>
                     </div>
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
                       <p className="text-[10px] sm:text-sm text-gray-500">Completed</p>
-                      <p className="text-lg sm:text-2xl font-bold text-[#00008b]">
+                      <p className="text-lg sm:text-2xl font-bold text-[#8cc63e]">
                         {reportData.completed}
                       </p>
                     </div>
@@ -903,7 +903,7 @@ const Reports = () => {
                             <div
                               className={`h-1.5 sm:h-2 rounded-full ${
                                 domainData.compliance[index] >= 80
-                                  ? "bg-[#00008b]"
+                                  ? "bg-[#8cc63e]"
                                   : domainData.compliance[index] >= 60
                                     ? "bg-yellow-500"
                                     : "bg-red-500"
@@ -1095,7 +1095,7 @@ const Reports = () => {
                           <div
                             className={`h-1.5 sm:h-2 rounded-full ${
                               region.complianceRate >= 80
-                                ? "bg-[#00008b]"
+                                ? "bg-[#8cc63e]"
                                 : region.complianceRate >= 60
                                   ? "bg-yellow-500"
                                   : "bg-red-500"

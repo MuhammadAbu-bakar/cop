@@ -30,16 +30,16 @@ const AgingGaps = ({ data }) => {
 
   const total = data.reduce((sum, item) => sum + item.count, 0);
 
-  // All bars in #00008b color with different opacity levels for visual distinction
+  // All bars in #8cc63e color with different opacity levels for visual distinction
   const getColor = (label, index) => {
-    // Different shades of #00008b for visual distinction
+    // Different shades of #8cc63e for visual distinction
     const shades = [
-      "#00008b", // Full opacity
-      "#00008b", 
-      "#00008b",
-      "#00008b",
+      "#8cc63e", // Full opacity
+      "#8cc63e", 
+      "#8cc63e",
+      "#8cc63e",
     ];
-    return shades[index] || "#00008b";
+    return shades[index] || "#8cc63e";
   };
 
   // Custom tooltip
@@ -103,12 +103,12 @@ const AgingGaps = ({ data }) => {
               name="Number of Gaps"
               radius={[4, 4, 0, 0]}
               barSize={40}
-              fill="#00008b"
+              fill="#8cc63e"
             >
               {data.map((entry, index) => (
                 <Cell
                   key={`cell-${index}`}
-                  fill="#00008b"
+                  fill="#8cc63e"
                 />
               ))}
             </Bar>
@@ -125,7 +125,7 @@ const AgingGaps = ({ data }) => {
               <div className="flex items-center justify-center gap-1 sm:gap-2 mb-1">
                 <div
                   className="w-2 h-2 sm:w-3 sm:h-3 rounded-full"
-                  style={{ backgroundColor: "#00008b" }}
+                  style={{ backgroundColor: "#8cc63e" }}
                 ></div>
                 <span className="text-[10px] sm:text-xs text-gray-600">
                   {item.label}

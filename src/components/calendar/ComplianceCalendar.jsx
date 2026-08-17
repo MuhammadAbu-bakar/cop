@@ -50,13 +50,13 @@ const ComplianceCalendar = () => {
 
   const getTypeBadge = (frequency) => {
     const badges = {
-      Monthly: "bg-blue-100 text-blue-800",
-      Quarterly: "bg-purple-100 text-purple-800",
-      "Bi-Annual": "bg-indigo-100 text-indigo-800",
-      Annual: "bg-green-100 text-green-800",
-      "One-Time": "bg-orange-100 text-orange-800",
-      "Event Based": "bg-orange-100 text-orange-800",
-      Continuous: "bg-teal-100 text-teal-800",
+      Monthly: "bg-green-100 text-green-800",
+      Quarterly: "bg-emerald-100 text-emerald-800",
+      "Bi-Annual": "bg-teal-100 text-teal-800",
+      Annual: "bg-lime-100 text-lime-800",
+      "One-Time": "bg-amber-100 text-amber-800",
+      "Event Based": "bg-amber-100 text-amber-800",
+      Continuous: "bg-cyan-100 text-cyan-800",
     };
     return badges[frequency] || "bg-gray-100 text-gray-800";
   };
@@ -162,20 +162,20 @@ const ComplianceCalendar = () => {
           key={day}
           onClick={() => handleDateClick(dateStr, dayObligations)}
           className={`min-h-24 border border-gray-200 p-1 hover:bg-gray-50 transition-colors cursor-pointer ${
-            isToday ? "bg-blue-50 border-blue-300" : ""
+            isToday ? "bg-green-50 border-green-300" : ""
           } ${isPast && !isToday ? "bg-gray-50/30" : ""} ${
             hasOverdue ? "border-l-4 border-l-red-500" : ""
           }`}
         >
           <div className="flex justify-between items-start">
             <span className={`text-sm font-medium ${
-              isToday ? "text-[#00008b] font-bold" : "text-gray-700"
+              isToday ? "text-[#8cc63e] font-bold" : "text-gray-700"
             }`}>
               {day}
             </span>
             {dayObligations.length > 0 && (
               <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-                hasOverdue ? "bg-red-100 text-red-800" : "bg-[#00008b] text-white"
+                hasOverdue ? "bg-red-100 text-red-800" : "bg-[#8cc63e] text-white"
               }`}>
                 {dayObligations.length}
               </span>
@@ -226,7 +226,7 @@ const ComplianceCalendar = () => {
             <button
               onClick={() => setCurrentDate(new Date())}
               className="px-3 py-1 text-white rounded-md hover:opacity-90 transition-colors text-sm"
-              style={{ backgroundColor: "#00008b" }}
+              style={{ backgroundColor: "#8cc63e" }}
             >
               Today
             </button>
@@ -311,7 +311,7 @@ const ComplianceCalendar = () => {
             <button
               onClick={() => setCurrentDate(new Date())}
               className="px-3 py-1 text-white rounded-md hover:opacity-90 transition-colors text-sm"
-              style={{ backgroundColor: "#00008b" }}
+              style={{ backgroundColor: "#8cc63e" }}
             >
               Today
             </button>
@@ -338,7 +338,7 @@ const ComplianceCalendar = () => {
                         {overdue} Overdue
                       </span>
                     )}
-                    <span className="text-xs text-white px-2 py-0.5 rounded-full" style={{ backgroundColor: "#00008b" }}>
+                    <span className="text-xs text-white px-2 py-0.5 rounded-full" style={{ backgroundColor: "#8cc63e" }}>
                       {monthObligations.length}
                     </span>
                   </div>
@@ -366,7 +366,7 @@ const ComplianceCalendar = () => {
                         className="rounded-full h-2 transition-all duration-300"
                         style={{
                           width: `${(completed / monthObligations.length) * 100}%`,
-                          backgroundColor: "#00008b"
+                          backgroundColor: "#8cc63e"
                         }}
                       ></div>
                     </div>
@@ -479,7 +479,7 @@ const ComplianceCalendar = () => {
             <button
               onClick={() => setCurrentDate(new Date())}
               className="px-3 py-1 text-white rounded-md hover:opacity-90 transition-colors text-sm"
-              style={{ backgroundColor: "#00008b" }}
+              style={{ backgroundColor: "#8cc63e" }}
             >
               Today
             </button>
@@ -501,11 +501,11 @@ const ComplianceCalendar = () => {
               <div 
                 key={monthName} 
                 className={`border rounded-lg p-4 hover:shadow-md transition-shadow ${
-                  isCurrentMonth ? "border-blue-300 bg-blue-50/30" : ""
+                  isCurrentMonth ? "border-green-300 bg-green-50/30" : ""
                 } ${overdue > 0 ? "border-l-4 border-l-red-500" : ""}`}
               >
                 <div className="flex justify-between items-start mb-2">
-                  <h4 className={`font-semibold ${isCurrentMonth ? "text-[#00008b]" : "text-gray-900"}`}>
+                  <h4 className={`font-semibold ${isCurrentMonth ? "text-[#8cc63e]" : "text-gray-900"}`}>
                     {monthName}
                     {isCurrentMonth && " ◄"}
                   </h4>
@@ -516,7 +516,7 @@ const ComplianceCalendar = () => {
                       </span>
                     )}
                     {monthObligations.length > 0 && (
-                      <span className="text-xs text-white px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#00008b" }}>
+                      <span className="text-xs text-white px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#8cc63e" }}>
                         {monthObligations.length}
                       </span>
                     )}
@@ -545,7 +545,7 @@ const ComplianceCalendar = () => {
                         className="rounded-full h-1.5 transition-all duration-300"
                         style={{
                           width: `${(completed / monthObligations.length) * 100}%`,
-                          backgroundColor: "#00008b"
+                          backgroundColor: "#8cc63e"
                         }}
                       ></div>
                     </div>
@@ -587,7 +587,7 @@ const ComplianceCalendar = () => {
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
         <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
-          <div className={`flex justify-between items-center p-4 border-b ${hasOverdue ? "bg-red-50" : ""}`} style={!hasOverdue ? { backgroundColor: "#00008b" } : {}}>
+          <div className={`flex justify-between items-center p-4 border-b ${hasOverdue ? "bg-red-50" : ""}`} style={!hasOverdue ? { backgroundColor: "#8cc63e" } : {}}>
             <div>
               <h3 className={`text-lg font-semibold ${hasOverdue ? "text-gray-900" : "text-white"}`}>
                 Obligations for {new Date(selectedDate).toLocaleDateString("en-US", {
@@ -706,7 +706,7 @@ const ComplianceCalendar = () => {
                 setSelectedObligations([]);
               }}
               className="w-full px-4 py-2 text-white rounded-md hover:opacity-90 transition-colors"
-              style={{ backgroundColor: "#00008b" }}
+              style={{ backgroundColor: "#8cc63e" }}
             >
               Close
             </button>
@@ -720,7 +720,7 @@ const ComplianceCalendar = () => {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 mx-auto" style={{ borderColor: "#00008b" }}></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 mx-auto" style={{ borderColor: "#8cc63e" }}></div>
           <p className="mt-4 text-gray-600">Loading calendar data...</p>
         </div>
       </div>
@@ -755,7 +755,7 @@ const ComplianceCalendar = () => {
                 ? "text-white"
                 : "bg-gray-100 text-gray-700 hover:bg-gray-200"
             }`}
-            style={view === "month" ? { backgroundColor: "#00008b" } : {}}
+            style={view === "month" ? { backgroundColor: "#8cc63e" } : {}}
           >
             Monthly
           </button>
@@ -766,7 +766,7 @@ const ComplianceCalendar = () => {
                 ? "text-white"
                 : "bg-gray-100 text-gray-700 hover:bg-gray-200"
             }`}
-            style={view === "quarter" ? { backgroundColor: "#00008b" } : {}}
+            style={view === "quarter" ? { backgroundColor: "#8cc63e" } : {}}
           >
             Quarterly
           </button>
@@ -777,7 +777,7 @@ const ComplianceCalendar = () => {
                 ? "text-white"
                 : "bg-gray-100 text-gray-700 hover:bg-gray-200"
             }`}
-            style={view === "year" ? { backgroundColor: "#00008b" } : {}}
+            style={view === "year" ? { backgroundColor: "#8cc63e" } : {}}
           >
             Annual
           </button>
@@ -833,23 +833,23 @@ const ComplianceCalendar = () => {
           <span className="text-sm font-medium text-gray-700">Frequency:</span>
           <div className="flex flex-wrap gap-3">
             <div className="flex items-center">
-              <span className="w-3 h-3 bg-blue-100 border border-blue-300 rounded mr-1.5"></span>
+              <span className="w-3 h-3 bg-green-100 border border-green-300 rounded mr-1.5"></span>
               <span className="text-xs text-gray-600">Monthly</span>
             </div>
             <div className="flex items-center">
-              <span className="w-3 h-3 bg-purple-100 border border-purple-300 rounded mr-1.5"></span>
+              <span className="w-3 h-3 bg-emerald-100 border border-emerald-300 rounded mr-1.5"></span>
               <span className="text-xs text-gray-600">Quarterly</span>
             </div>
             <div className="flex items-center">
-              <span className="w-3 h-3 bg-indigo-100 border border-indigo-300 rounded mr-1.5"></span>
+              <span className="w-3 h-3 bg-teal-100 border border-teal-300 rounded mr-1.5"></span>
               <span className="text-xs text-gray-600">Bi-Annual</span>
             </div>
             <div className="flex items-center">
-              <span className="w-3 h-3 bg-green-100 border border-green-300 rounded mr-1.5"></span>
+              <span className="w-3 h-3 bg-lime-100 border border-lime-300 rounded mr-1.5"></span>
               <span className="text-xs text-gray-600">Annual</span>
             </div>
             <div className="flex items-center">
-              <span className="w-3 h-3 bg-orange-100 border border-orange-300 rounded mr-1.5"></span>
+              <span className="w-3 h-3 bg-amber-100 border border-amber-300 rounded mr-1.5"></span>
               <span className="text-xs text-gray-600">Event Based</span>
             </div>
           </div>

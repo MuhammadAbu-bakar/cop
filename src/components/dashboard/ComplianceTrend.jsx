@@ -24,7 +24,7 @@ const ComplianceTrend = ({ data }) => {
       return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
           <p className="text-sm font-medium text-gray-900">{label}</p>
-          <p className="text-sm font-bold" style={{ color: '#00008b' }}>
+          <p className="text-sm font-bold" style={{ color: '#8cc63e' }}>
             {payload[0].value}%
           </p>
         </div>
@@ -50,7 +50,7 @@ const ComplianceTrend = ({ data }) => {
           <p className="text-xs text-gray-500 mt-0.5">Last 6 Months</p>
         </div>
         <div className="text-right">
-          <span className="text-lg sm:text-xl md:text-2xl font-bold" style={{ color: '#00008b' }}>
+          <span className="text-lg sm:text-xl md:text-2xl font-bold" style={{ color: '#8cc63e' }}>
             {data[data.length - 1]?.value || 0}%
           </span>
           <p className="text-[10px] text-gray-500">Current</p>
@@ -66,8 +66,8 @@ const ComplianceTrend = ({ data }) => {
           >
             <defs>
               <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#00008b" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#00008b" stopOpacity={0}/>
+                <stop offset="5%" stopColor="#8cc63e" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="#8cc63e" stopOpacity={0}/>
               </linearGradient>
             </defs>
             
@@ -115,16 +115,16 @@ const ComplianceTrend = ({ data }) => {
             <Line
               type="monotone"
               dataKey="value"
-              stroke="#00008b"
+              stroke="#8cc63e"
               strokeWidth={2.5}
               dot={{
-                fill: '#00008b',
+                fill: '#8cc63e',
                 stroke: '#fff',
                 strokeWidth: 2,
                 r: 4
               }}
               activeDot={{
-                fill: '#00008b',
+                fill: '#8cc63e',
                 stroke: '#fff',
                 strokeWidth: 2,
                 r: 6
@@ -144,7 +144,7 @@ const ComplianceTrend = ({ data }) => {
           <p className="text-[10px] text-gray-500">Change</p>
           <p className={`text-sm font-semibold ${
             (data[data.length - 1]?.value || 0) > (data[0]?.value || 0) 
-              ? 'text-green-600' 
+              ? 'text-[#8cc63e]' 
               : 'text-red-600'
           }`}>
             {((data[data.length - 1]?.value || 0) - (data[0]?.value || 0)) > 0 ? '+' : ''}
