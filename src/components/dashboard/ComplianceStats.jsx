@@ -1,7 +1,4 @@
-// ============================================================
-// ComplianceStats.jsx - Executive Summary Cards with Recharts Donut Charts
-// ============================================================
-
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { 
@@ -18,10 +15,41 @@ import {
   FaFlag,
   FaGlobe
 } from 'react-icons/fa';
-import { FiTrendingUp, FiTrendingDown } from 'react-icons/fi';
+import { getDashboardStats } from "../../api/compliance";
 
-const ComplianceStats = ({ stats }) => {
+const ComplianceStats = ({ userRegion, isAdmin }) => {
   const navigate = useNavigate();
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState({
+    overallCompliance: 0,
+    auditReadiness: 0,
+    totalObligations: 0,
+    completed: 0,
+    pending: 0,
+    overdue: 0,
+    inProgress: 0,
+    notStarted: 0,
+    highRiskGaps: 0,
+    regionsBelowTarget: 0,
+    regionsTotal: 0,
+    evidenceCompletion: 0,
+  });
+
+  useEffect(() => {
+    fetchStats();
+  }, [userRegion, isAdmin]);
+
+  const fetchStats = async () => {
+    setLoading(true);
+    try {
+      const statsData = await getDashboardStats(userRegion, isAdmin);
+      setStats(statsData);
+    } catch (error) {
+      console.error("Error fetching dashboard stats:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleCardClick = (filterType, filterValue) => {
     const params = new URLSearchParams();
@@ -31,27 +59,6 @@ const ComplianceStats = ({ stats }) => {
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`);
   };
 
-  const getChangeColor = (change) => {
-    if (!change) return "text-gray-500";
-    const numChange = parseFloat(change);
-    if (numChange > 0) return "text-green-600";
-    if (numChange < 0) return "text-red-600";
-    return "text-gray-500";
-  };
-
-  const getChangeIcon = (change) => {
-    if (!change) return null;
-    const numChange = parseFloat(change);
-    if (numChange > 0) {
-      return <FaArrowUp className="h-3 w-3 inline" />;
-    }
-    if (numChange < 0) {
-      return <FaArrowDown className="h-3 w-3 inline" />;
-    }
-    return <FaMinus className="h-3 w-3 inline" />;
-  };
-
-  // Get icon for each stat card
   const getStatIcon = (title, color) => {
     const iconMap = {
       "Overall Compliance": <FaChartLine className="h-4 w-4" style={{ color: color }} />,
@@ -65,7 +72,6 @@ const ComplianceStats = ({ stats }) => {
     return iconMap[title] || <FaExclamationCircle className="h-4 w-4" style={{ color: color }} />;
   };
 
-  // Donut Chart Component using Recharts
   const DonutChart = ({ percentage, size = 70, color = "#000072" }) => {
     const getColor = (value) => {
       if (value >= 80) return "#22c55e";
@@ -102,7 +108,6 @@ const ComplianceStats = ({ stats }) => {
             </Pie>
           </PieChart>
         </ResponsiveContainer>
-        {/* Center text */}
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-sm font-bold" style={{ color: chartColor }}>
             {percentage}%
@@ -116,7 +121,6 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "Overall Compliance",
       value: `${stats.overallCompliance || 0}%`,
-      change: "2% vs. last month",
       color: "#000072",
       filterType: "all",
       filterValue: null,
@@ -127,7 +131,6 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "Audit Readiness",
       value: `${stats.auditReadiness || 0}%`,
-      change: "3% vs. last month",
       color: "#3b82f6",
       filterType: null,
       filterValue: null,
@@ -137,7 +140,7 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "Mandatory Obligations",
       value: `${stats.completed || 0} / ${stats.totalObligations || 0}`,
-      subtitle: `${Math.round((stats.completed / stats.totalObligations) * 100)}% Compliant`,
+      subtitle: `${stats.totalObligations > 0 ? Math.round((stats.completed / stats.totalObligations) * 100) : 0}% Compliant`,
       color: "#22c55e",
       filterType: null,
       filterValue: null,
@@ -147,7 +150,6 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "Overdue Obligations",
       value: stats.overdue || 0,
-      change: "40% vs. last month",
       color: "#ef4444",
       filterType: "status",
       filterValue: "Overdue",
@@ -157,7 +159,6 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "Evidence Completion",
       value: `${stats.evidenceCompletion || 0}%`,
-      change: "2% vs. last month",
       color: "#8b5cf6",
       filterType: null,
       filterValue: null,
@@ -167,7 +168,6 @@ const ComplianceStats = ({ stats }) => {
     {
       title: "High-Risk Gaps",
       value: stats.highRiskGaps || 0,
-      change: "50% vs. last month",
       color: "#f97316",
       filterType: null,
       filterValue: null,
@@ -184,9 +184,29 @@ const ComplianceStats = ({ stats }) => {
     },
   ];
 
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5 lg:p-6 overflow-hidden">
+        <div className="mb-4">
+          <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
+            Executive Summary
+          </h3>
+          <p className="text-xs text-gray-500 mt-0.5">Loading compliance data...</p>
+        </div>
+        <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
+          {[...Array(7)].map((_, index) => (
+            <div key={index} className="bg-white rounded-lg border border-gray-200 p-3 sm:p-4 flex flex-col items-center animate-pulse">
+              <div className="w-12 h-3 bg-gray-200 rounded mb-2"></div>
+              <div className="w-12 h-8 bg-gray-200 rounded mt-1"></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5 lg:p-6 overflow-hidden">
-      {/* Section Header */}
       <div className="mb-4">
         <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
           Executive Summary
@@ -194,7 +214,6 @@ const ComplianceStats = ({ stats }) => {
         <p className="text-xs text-gray-500 mt-0.5">Compliance overview at a glance</p>
       </div>
 
-      {/* Stats Cards Grid */}
       <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">
         {statCards.map((stat, index) => (
           <div
@@ -215,7 +234,6 @@ const ComplianceStats = ({ stats }) => {
                 </p>
               </div>
               
-              {/* Donut Chart or Value */}
               {stat.showDonut ? (
                 <div className="flex flex-col items-center mt-1">
                   <DonutChart 
@@ -234,17 +252,6 @@ const ComplianceStats = ({ stats }) => {
                 </div>
               )}
               
-              {/* Change Indicator */}
-              {stat.change && (
-                <div className="flex items-center justify-center mt-0.5">
-                  <span className={`text-[10px] xs:text-xs font-medium ${getChangeColor(stat.change)}`}>
-                    {getChangeIcon(stat.change)}
-                    <span className="ml-0.5">{stat.change}</span>
-                  </span>
-                </div>
-              )}
-              
-              {/* Subtitle for obligations */}
               {stat.subtitle && (
                 <p className="text-[10px] xs:text-xs text-gray-500 text-center mt-0.5">{stat.subtitle}</p>
               )}

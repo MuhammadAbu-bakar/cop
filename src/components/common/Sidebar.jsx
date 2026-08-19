@@ -2,12 +2,13 @@
 // Sidebar.jsx - Compact with icons above text, green background
 // ============================================================
 
-import { NavLink } from "react-router-dom";
+import { NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import copLogo from "../../assets/images/cop-logo.png";
 
 const Sidebar = () => {
   const { profile } = useAuth();
+  const navigate = useNavigate();
   const isAdmin = profile?.role === "admin";
 
   const navigation = [
@@ -51,6 +52,10 @@ const Sidebar = () => {
   //   });
   // }
 
+  const handleLogoClick = () => {
+    navigate("/dashboard");
+  };
+
   return (
     <>
       {/* Desktop Sidebar */}
@@ -58,10 +63,20 @@ const Sidebar = () => {
         className="hidden md:flex md:w-20 lg:w-24 flex-col h-screen fixed left-0 top-0 z-30 border-r border-green-700/30"
         style={{ backgroundColor: "#8cc63e" }}
       >
-        {/* Logo Section - Small and compact */}
+        {/* Logo Section - Clickable to navigate to dashboard */}
         <div 
-          className="h-12 sm:h-14 flex items-center justify-center border-b border-green-700/30 flex-shrink-0"
+          className="h-12 sm:h-14 flex items-center justify-center border-b border-green-700/30 flex-shrink-0 cursor-pointer hover:bg-white/5 transition-colors duration-200"
           style={{ backgroundColor: "#8cc63e" }}
+          onClick={handleLogoClick}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              handleLogoClick();
+            }
+          }}
+          aria-label="Navigate to dashboard"
         >
           <div className="w-8 h-8 lg:w-10 lg:h-10 rounded-lg overflow-hidden flex-shrink-0 bg-white/10 p-1">
             <img

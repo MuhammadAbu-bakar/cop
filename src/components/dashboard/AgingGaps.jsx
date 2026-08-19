@@ -1,7 +1,4 @@
-// ============================================================
-// AgingGaps.jsx
-// ============================================================
-
+import { useState, useEffect } from "react";
 import {
   BarChart,
   Bar,
@@ -13,34 +10,123 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
+import { supabase } from "../../api/supabase";
 
-const AgingGaps = ({ data }) => {
-  if (!data || data.length === 0) {
+const AgingGaps = ({ userRegion, isAdmin }) => {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState([
+    { label: '0-30 days', count: 0 },
+    { label: '31-60 days', count: 0 },
+    { label: '61-90 days', count: 0 },
+    { label: '90+ days', count: 0 },
+  ]);
+
+  useEffect(() => {
+    fetchAgingData();
+  }, [userRegion, isAdmin]);
+
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  const fetchAgingData = async () => {
+    setLoading(true);
+    try {
+      let regionId = null;
+      if (!isAdmin && userRegion) {
+        regionId = await getRegionId(userRegion);
+      }
+
+      let progressQuery = supabase
+        .from('obligation_progress')
+        .select('obligation_id')
+        .eq('status', 'Overdue');
+
+      if (regionId) {
+        progressQuery = progressQuery.eq('region_id', regionId);
+      }
+
+      const { data: overdueProgress, error } = await progressQuery;
+      if (error) throw error;
+
+      const overdueIds = overdueProgress?.map(p => p.obligation_id) || [];
+
+      if (overdueIds.length === 0) {
+        setData([
+          { label: '0-30 days', count: 0 },
+          { label: '31-60 days', count: 0 },
+          { label: '61-90 days', count: 0 },
+          { label: '90+ days', count: 0 },
+        ]);
+        setLoading(false);
+        return;
+      }
+
+      const { data: overdueObligations } = await supabase
+        .from('obligations')
+        .select('id, calculated_due_date')
+        .in('id', overdueIds);
+
+      const today = new Date();
+      const aging = {
+        '0-30 days': 0,
+        '31-60 days': 0,
+        '61-90 days': 0,
+        '90+ days': 0,
+      };
+
+      overdueObligations?.forEach(o => {
+        if (!o.calculated_due_date) return;
+        const dueDate = new Date(o.calculated_due_date);
+        const diffDays = Math.floor((today - dueDate) / (1000 * 60 * 60 * 24));
+        
+        if (diffDays > 0) {
+          if (diffDays <= 30) aging['0-30 days']++;
+          else if (diffDays <= 60) aging['31-60 days']++;
+          else if (diffDays <= 90) aging['61-90 days']++;
+          else aging['90+ days']++;
+        }
+      });
+
+      const agingData = Object.entries(aging).map(([label, count]) => ({
+        label,
+        count,
+      }));
+
+      setData(agingData);
+
+    } catch (error) {
+      console.error('Error fetching aging data:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
     return (
       <div className="bg-white rounded-lg shadow p-4 sm:p-5 md:p-6">
         <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900 mb-4">
           Aging of Compliance Gaps
         </h3>
-        <div className="text-center py-6 text-gray-500 text-sm">
-          No gap data available
-        </div>
+        <div className="h-64 bg-gray-100 rounded animate-pulse"></div>
       </div>
     );
   }
 
   const total = data.reduce((sum, item) => sum + item.count, 0);
-
-  // All bars in #8cc63e color with different opacity levels for visual distinction
-  const getColor = (label, index) => {
-    // Different shades of #8cc63e for visual distinction
-    const shades = [
-      "#8cc63e", // Full opacity
-      "#8cc63e", 
-      "#8cc63e",
-      "#8cc63e",
-    ];
-    return shades[index] || "#8cc63e";
-  };
 
   // Custom tooltip
   const CustomTooltip = ({ active, payload, label }) => {

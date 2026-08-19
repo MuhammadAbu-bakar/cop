@@ -18,10 +18,28 @@ import AdminPanel from "./components/admin/AdminPanel";
 import Policies from "./components/policies/Policies";
 import AuditHistory from "./components/audit/AuditHistory";
 
+import { ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
+
 function App() {
   return (
     <Router>
       <AuthProvider>
+        {/* ToastContainer with all options */}
+        <ToastContainer 
+          position="top-right"
+          autoClose={5000}
+          hideProgressBar={false}
+          newestOnTop={true}
+          closeOnClick
+          rtl={false}
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="light"
+          limit={5} // Limit number of toasts shown at once
+        />
+        
         <Routes>
           {/* Public Routes - Only Login */}
           <Route path="/login" element={<Login />} />

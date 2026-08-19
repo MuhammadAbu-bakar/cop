@@ -3,12 +3,17 @@ import { Link, useNavigate, useLocation } from "react-router-dom";
 import { getObligations } from "../../api/compliance";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
+import { toast } from 'react-toastify';
 
 const ComplianceRegister = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
+  // FIXED: Use region_name instead of region_code
+  const userRegion = profile?.region_name || null;
+  // Regional user can also add event obligations
+  const canAddEvent = isAdmin || profile?.role === "regional_user";
   
   const [obligations, setObligations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,6 +23,10 @@ const ComplianceRegister = () => {
   const [filterDomain, setFilterDomain] = useState("all");
   const [hoveredObligation, setHoveredObligation] = useState(null);
   const [activeTab, setActiveTab] = useState("Cyclic");
+
+  // Sorting states
+  const [sortField, setSortField] = useState(null);
+  const [sortDirection, setSortDirection] = useState('asc');
 
   // Add Modal States
   const [showAddModal, setShowAddModal] = useState(false);
@@ -42,8 +51,9 @@ const ComplianceRegister = () => {
     manual_upload_required: false,
     mandatory: false,
     compliance_weight: 1,
-    current_status: "Not Started",
-    region: "",
+    current_status: "In Progress",
+    region: userRegion || "",
+    calculated_due_date: "",
     obligation_type: "Cyclic",
   });
 
@@ -51,7 +61,7 @@ const ComplianceRegister = () => {
   const [eventTemplates, setEventTemplates] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   
-  // Obligation name options for dropdown
+  // Obligation name options for dropdown (from event_obligations table for auto-fill)
   const [obligationNameOptions, setObligationNameOptions] = useState([]);
   const [filteredNameOptions, setFilteredNameOptions] = useState([]);
   const [nameSearchTerm, setNameSearchTerm] = useState("");
@@ -78,7 +88,7 @@ const ComplianceRegister = () => {
     mandatory: false,
     compliance_weight: 1,
     current_status: "",
-    obligation_type: "Cyclic",
+    obligation_type: "",
   });
   const [editLoading, setEditLoading] = useState(false);
   const [editError, setEditError] = useState("");
@@ -91,6 +101,9 @@ const ComplianceRegister = () => {
 
   // Policies state for dropdown
   const [policies, setPolicies] = useState([]);
+
+  // Store event obligations data for autofill
+  const [eventObligationsData, setEventObligationsData] = useState([]);
 
   // Parse URL parameters on mount and when location changes
   useEffect(() => {
@@ -128,21 +141,187 @@ const ComplianceRegister = () => {
     };
   }, []);
 
+  // FIXED: Get region ID from region name (not code)
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) {
+        console.error('Error getting region ID:', error);
+        return null;
+      }
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  // Fetch all obligations with their progress for the user's region
   const fetchObligations = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase
+      let userRegionId = null;
+      if (!isAdmin && userRegion) {
+        userRegionId = await getRegionId(userRegion);
+        console.log('User region name:', userRegion);
+        console.log('User region ID:', userRegionId);
+      }
+
+      let query = supabase
         .from("obligations")
-        .select("*")
+        .select(`
+          *,
+          obligation_progress!left(
+            id,
+            status,
+            completed_at,
+            started_at,
+            last_updated_at,
+            comments,
+            region_id
+          )
+        `)
         .order("created_at", { ascending: false });
 
+      const { data, error } = await query;
+
       if (!error && data) {
-        setObligations(data);
+        const processedData = data
+          .map(obligation => {
+            // For regional users, only show obligations with progress for their region
+            if (!isAdmin && userRegionId) {
+              const progressForRegion = obligation.obligation_progress?.find(
+                p => p.region_id === userRegionId
+              );
+              
+              // If no progress for this region, skip this obligation
+              if (!progressForRegion) return null;
+              
+              return {
+                ...obligation,
+                current_status: progressForRegion.status,
+                progress_id: progressForRegion.id || null,
+                progress_status: progressForRegion.status || null,
+                completed_at: progressForRegion.completed_at || null,
+                started_at: progressForRegion.started_at || null,
+                last_updated_at: progressForRegion.last_updated_at || null,
+                progress_comments: progressForRegion.comments || null,
+                user_region_id: userRegionId,
+                has_progress: true,
+              };
+            }
+
+            // For admin, use progress status if available, otherwise use obligation status
+            const progress = obligation.obligation_progress?.[0] || null;
+            const status = progress?.status || obligation.current_status || 'Not Started';
+            
+            return {
+              ...obligation,
+              current_status: status,
+              progress_id: progress?.id || null,
+              progress_status: progress?.status || null,
+              completed_at: progress?.completed_at || null,
+              started_at: progress?.started_at || null,
+              last_updated_at: progress?.last_updated_at || null,
+              progress_comments: progress?.comments || null,
+              has_progress: !!progress,
+            };
+          })
+          .filter(obligation => obligation !== null);
+
+        setObligations(processedData);
       }
     } catch (error) {
       console.error("Error fetching obligations:", error);
+      toast.error("Failed to load obligations. Please refresh the page.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Function to update obligation status directly in progress table
+  const updateObligationStatus = async (obligationId, status, comment = '') => {
+    try {
+      // Get the region ID for the user
+      const regionId = await getRegionId(userRegion);
+      
+      if (!regionId && !isAdmin) {
+        toast.error("Region not found for user.");
+        return false;
+      }
+
+      // For regional users, only allow valid statuses
+      let progressStatus = status;
+      if (!isAdmin && status !== 'Completed' && status !== 'In Progress' && status !== 'Overdue') {
+        progressStatus = 'In Progress';
+      }
+
+      // Check if progress record exists
+      const { data: existingProgress, error: checkError } = await supabase
+        .from('obligation_progress')
+        .select('id')
+        .eq('obligation_id', obligationId)
+        .eq('region_id', regionId)
+        .single();
+
+      let updateData = {
+        status: progressStatus,
+        last_updated_at: new Date().toISOString(),
+      };
+
+      // Add timestamps based on status
+      if (progressStatus === 'Completed') {
+        updateData.completed_at = new Date().toISOString();
+      } else if (progressStatus === 'In Progress' && !existingProgress?.started_at) {
+        updateData.started_at = new Date().toISOString();
+      }
+
+      if (comment) {
+        updateData.comments = comment;
+      }
+
+      let result;
+      if (existingProgress) {
+        // Update existing progress
+        result = await supabase
+          .from('obligation_progress')
+          .update(updateData)
+          .eq('id', existingProgress.id);
+      } else {
+        // Insert new progress record
+        result = await supabase
+          .from('obligation_progress')
+          .insert({
+            obligation_id: obligationId,
+            region_id: regionId,
+            status: progressStatus,
+            ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
+            ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
+            ...(comment && { comments: comment }),
+          });
+      }
+
+      if (result.error) throw result.error;
+
+      // Also update the main obligations table for backward compatibility
+      await supabase
+        .from('obligations')
+        .update({
+          current_status: progressStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', obligationId);
+
+      return true;
+    } catch (error) {
+      console.error('Error updating obligation status:', error);
+      return false;
     }
   };
 
@@ -176,17 +355,16 @@ const ComplianceRegister = () => {
 
   const fetchObligationNameOptions = async () => {
     try {
-      // Fetch distinct obligation names from the database
       const { data, error } = await supabase
-        .from("obligations")
-        .select("name")
+        .from("event_obligations")
+        .select("name, obligation_id, clause, domain, description, responsible, accountable, frequency, due_date_rule, evidence_required, evidence_type, source_system, portal_action, manual_upload_required, mandatory, compliance_weight, region, calculated_due_date, policy_id")
         .order("name");
 
       if (!error && data) {
-        // Get unique names
         const uniqueNames = [...new Set(data.map(item => item.name).filter(Boolean))];
         setObligationNameOptions(uniqueNames);
         setFilteredNameOptions(uniqueNames);
+        setEventObligationsData(data);
       }
     } catch (error) {
       console.error("Error fetching obligation name options:", error);
@@ -199,6 +377,7 @@ const ComplianceRegister = () => {
       "In Progress": "bg-blue-100 text-blue-800",
       Pending: "bg-yellow-100 text-yellow-800",
       Overdue: "bg-red-100 text-red-800",
+      "Due Today": "bg-orange-100 text-orange-800",
       "Not Started": "bg-gray-100 text-gray-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
@@ -225,93 +404,6 @@ const ComplianceRegister = () => {
   const getFrequencies = () => {
     const frequencies = new Set(obligations.map((o) => o.frequency));
     return ["all", ...frequencies];
-  };
-
-  // Function to get the next due date based on frequency and due date rule
-  const getNextDueDate = (obligation) => {
-    const today = new Date();
-    const dueDateRule = obligation.due_date_rule || "";
-    const frequency = obligation.frequency || "";
-
-    if (dueDateRule) {
-      if (
-        dueDateRule.toLowerCase().includes("month end") ||
-        dueDateRule.toLowerCase().includes("end of month")
-      ) {
-        const lastDayOfMonth = new Date(
-          today.getFullYear(),
-          today.getMonth() + 1,
-          0,
-        );
-        return lastDayOfMonth.toISOString().split("T")[0];
-      }
-
-      if (dueDateRule.toLowerCase().includes("start of month")) {
-        const firstDayOfMonth = new Date(
-          today.getFullYear(),
-          today.getMonth(),
-          1,
-        );
-        return firstDayOfMonth.toISOString().split("T")[0];
-      }
-
-      if (dueDateRule.toLowerCase().includes("quarter end")) {
-        const quarter = Math.floor(today.getMonth() / 3);
-        const lastMonthOfQuarter = (quarter + 1) * 3;
-        const lastDay = new Date(today.getFullYear(), lastMonthOfQuarter, 0);
-        return lastDay.toISOString().split("T")[0];
-      }
-
-      const withinDaysMatch = dueDateRule.match(/within\s*(\d+)\s*days?/i);
-      if (withinDaysMatch) {
-        const days = parseInt(withinDaysMatch[1]);
-        const dueDate = new Date(today);
-        dueDate.setDate(dueDate.getDate() + days);
-        return dueDate.toISOString().split("T")[0];
-      }
-
-      if (
-        dueDateRule.toLowerCase().includes("purchase") ||
-        dueDateRule.toLowerCase().includes("immediately") ||
-        dueDateRule.toLowerCase().includes("as required") ||
-        dueDateRule.toLowerCase().includes("ongoing") ||
-        dueDateRule.toLowerCase().includes("n/a")
-      ) {
-        return "N/A";
-      }
-    }
-
-    switch (frequency) {
-      case "Monthly":
-        const nextMonth = new Date(today);
-        nextMonth.setMonth(nextMonth.getMonth() + 1);
-        nextMonth.setDate(1);
-        return nextMonth.toISOString().split("T")[0];
-
-      case "Quarterly":
-        const nextQuarter = new Date(today);
-        const currentQuarter = Math.floor(today.getMonth() / 3);
-        nextQuarter.setMonth((currentQuarter + 1) * 3);
-        nextQuarter.setDate(1);
-        return nextQuarter.toISOString().split("T")[0];
-
-      case "Yearly":
-      case "Annual":
-        const nextYear = new Date(today);
-        nextYear.setFullYear(nextYear.getFullYear() + 1);
-        nextYear.setMonth(0);
-        nextYear.setDate(1);
-        return nextYear.toISOString().split("T")[0];
-
-      case "Bi-Annual":
-        const nextBiAnnual = new Date(today);
-        nextBiAnnual.setMonth(nextBiAnnual.getMonth() + 6);
-        nextBiAnnual.setDate(1);
-        return nextBiAnnual.toISOString().split("T")[0];
-
-      default:
-        return "N/A";
-    }
   };
 
   const formatDate = (dateString) => {
@@ -345,29 +437,11 @@ const ComplianceRegister = () => {
     return due < today;
   };
 
-  // Fetch obligation data by name and policy
-  const fetchObligationDataByName = async (name, policyId) => {
-    if (!name || !policyId) return null;
-
-    try {
-      const { data, error } = await supabase
-        .from("obligations")
-        .select("*")
-        .eq("name", name)
-        .eq("policy_id", policyId)
-        .limit(1);
-
-      if (!error && data && data.length > 0) {
-        return data[0];
-      }
-      return null;
-    } catch (error) {
-      console.error("Error fetching obligation data:", error);
-      return null;
-    }
+  const fetchEventObligationDataByName = (name) => {
+    if (!name) return null;
+    return eventObligationsData.find(item => item.name === name) || null;
   };
 
-  // Handle obligation name search/filter
   const handleNameSearch = (searchText) => {
     setNameSearchTerm(searchText);
     setShowNameDropdown(true);
@@ -381,7 +455,6 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Handle obligation name selection
   const handleNameSelect = async (selectedName) => {
     setAddFormData(prev => ({
       ...prev,
@@ -391,70 +464,32 @@ const ComplianceRegister = () => {
     setFilteredNameOptions(obligationNameOptions);
     setShowNameDropdown(false);
 
-    // Auto-fill other fields if policy is selected
-    if (addFormData.policy_id) {
-      const obligationData = await fetchObligationDataByName(selectedName, addFormData.policy_id);
-      if (obligationData) {
-        setAddFormData(prev => ({
-          ...prev,
-          obligation_id: obligationData.obligation_id || prev.obligation_id,
-          clause: obligationData.clause || prev.clause,
-          domain: obligationData.domain || prev.domain,
-          description: obligationData.description || prev.description,
-          responsible: obligationData.responsible || prev.responsible,
-          accountable: obligationData.accountable || prev.accountable,
-          frequency: obligationData.frequency || prev.frequency,
-          due_date_rule: obligationData.due_date_rule || prev.due_date_rule,
-          evidence_required: obligationData.evidence_required || prev.evidence_required,
-          evidence_type: obligationData.evidence_type || prev.evidence_type,
-          source_system: obligationData.source_system || prev.source_system,
-          portal_action: obligationData.portal_action || prev.portal_action,
-          manual_upload_required: obligationData.manual_upload_required || prev.manual_upload_required,
-          mandatory: obligationData.mandatory || prev.mandatory,
-          compliance_weight: obligationData.compliance_weight || prev.compliance_weight,
-          region: obligationData.region || prev.region,
-        }));
-      }
+    const obligationData = fetchEventObligationDataByName(selectedName);
+    if (obligationData) {
+      setAddFormData(prev => ({
+        ...prev,
+        obligation_id: obligationData.obligation_id || prev.obligation_id,
+        policy_id: obligationData.policy_id || prev.policy_id,
+        clause: obligationData.clause || prev.clause,
+        domain: obligationData.domain || prev.domain,
+        description: obligationData.description || prev.description,
+        responsible: obligationData.responsible || prev.responsible,
+        accountable: obligationData.accountable || prev.accountable,
+        frequency: obligationData.frequency || prev.frequency,
+        due_date_rule: obligationData.due_date_rule || prev.due_date_rule,
+        evidence_required: obligationData.evidence_required || prev.evidence_required,
+        evidence_type: obligationData.evidence_type || prev.evidence_type,
+        source_system: obligationData.source_system || prev.source_system,
+        portal_action: obligationData.portal_action || prev.portal_action,
+        manual_upload_required: obligationData.manual_upload_required || prev.manual_upload_required,
+        mandatory: obligationData.mandatory || prev.mandatory,
+        compliance_weight: obligationData.compliance_weight || prev.compliance_weight,
+        region: obligationData.region || prev.region || userRegion,
+        calculated_due_date: obligationData.calculated_due_date || prev.calculated_due_date,
+      }));
     }
   };
 
-  // Handle policy selection change
-  const handlePolicyChange = async (e) => {
-    const policyId = e.target.value;
-    setAddFormData(prev => ({
-      ...prev,
-      policy_id: policyId,
-    }));
-
-    // If name is already selected, auto-fill fields with new policy data
-    if (addFormData.name && policyId) {
-      const obligationData = await fetchObligationDataByName(addFormData.name, policyId);
-      if (obligationData) {
-        setAddFormData(prev => ({
-          ...prev,
-          policy_id: policyId,
-          obligation_id: obligationData.obligation_id || prev.obligation_id,
-          clause: obligationData.clause || prev.clause,
-          domain: obligationData.domain || prev.domain,
-          description: obligationData.description || prev.description,
-          responsible: obligationData.responsible || prev.responsible,
-          accountable: obligationData.accountable || prev.accountable,
-          frequency: obligationData.frequency || prev.frequency,
-          due_date_rule: obligationData.due_date_rule || prev.due_date_rule,
-          evidence_required: obligationData.evidence_required || prev.evidence_required,
-          evidence_type: obligationData.evidence_type || prev.evidence_type,
-          source_system: obligationData.source_system || prev.source_system,
-          portal_action: obligationData.portal_action || prev.portal_action,
-          manual_upload_required: obligationData.manual_upload_required || prev.manual_upload_required,
-          mandatory: obligationData.mandatory || prev.mandatory,
-          compliance_weight: obligationData.compliance_weight || prev.compliance_weight,
-          region: obligationData.region || prev.region,
-        }));
-      }
-    }
-  };
-
-  // Add Functions
   const handleAddClick = (type) => {
     setAddFormData({
       obligation_id: "",
@@ -474,8 +509,9 @@ const ComplianceRegister = () => {
       manual_upload_required: false,
       mandatory: false,
       compliance_weight: 1,
-      current_status: "Not Started",
-      region: "",
+      current_status: "In Progress",
+      region: userRegion || "",
+      calculated_due_date: "",
       obligation_type: type,
     });
     setSelectedTemplate(null);
@@ -495,7 +531,6 @@ const ComplianceRegister = () => {
     }));
   };
 
-  // Handle template selection for event obligations
   const handleTemplateSelect = (e) => {
     const templateId = e.target.value;
     if (!templateId) {
@@ -524,6 +559,10 @@ const ComplianceRegister = () => {
         mandatory: template.mandatory || false,
         compliance_weight: template.compliance_weight || 1,
         clause: template.clause || "",
+        calculated_due_date: template.calculated_due_date || "",
+        policy_id: template.policy_id || null,
+        region: template.region || userRegion || "",
+        obligation_type: "Event",
       }));
       setNameSearchTerm(template.name || "");
       setShowNameDropdown(false);
@@ -554,6 +593,7 @@ const ComplianceRegister = () => {
         obligationId = generateObligationId();
       }
 
+      // Check for existing obligation_id in obligations table
       const { data: existing, error: checkError } = await supabase
         .from("obligations")
         .select("obligation_id")
@@ -564,10 +604,15 @@ const ComplianceRegister = () => {
         setAddError(
           `Obligation ID ${obligationId} already exists. Please use a different ID.`,
         );
+        toast.warning(`Obligation ID ${obligationId} already exists.`);
         setAddLoading(false);
         return;
       }
 
+      // Get region ID
+      const regionId = await getRegionId(addFormData.region || userRegion);
+
+      // Insert into obligations table
       const { data, error } = await supabase
         .from("obligations")
         .insert({
@@ -589,32 +634,75 @@ const ComplianceRegister = () => {
           mandatory: addFormData.mandatory,
           compliance_weight: parseInt(addFormData.compliance_weight),
           current_status: addFormData.current_status,
-          region: addFormData.region,
+          region: addFormData.region || userRegion,
+          calculated_due_date: addFormData.calculated_due_date || null,
           obligation_type: addFormData.obligation_type,
         })
         .select();
 
       if (error) throw error;
 
-      setAddSuccess(`Obligation ${obligationId} created successfully!`);
-      await fetchObligations();
+      // Insert into obligation_progress for the user's region
+      if (regionId && data && data[0]) {
+        // For regional users, validate status
+        let progressStatus = addFormData.current_status;
+        if (!isAdmin && progressStatus !== 'Completed' && progressStatus !== 'In Progress' && progressStatus !== 'Overdue') {
+          progressStatus = 'In Progress';
+        }
 
-      setTimeout(() => {
-        setShowAddModal(false);
-        setAddSuccess("");
-        alert(`Obligation ${obligationId} created successfully!`);
-      }, 1500);
+        await supabase
+          .from('obligation_progress')
+          .insert({
+            obligation_id: data[0].id,
+            region_id: regionId,
+            status: progressStatus,
+          });
+      }
+
+      setAddSuccess(`Obligation ${obligationId} created successfully!`);
+      toast.success(`Obligation ${obligationId} created successfully!`);
+      
+      setShowAddModal(false);
+      setAddFormData({
+        obligation_id: "",
+        policy_id: null,
+        clause: "",
+        domain: "",
+        name: "",
+        description: "",
+        responsible: "",
+        accountable: "",
+        frequency: "Monthly",
+        due_date_rule: "",
+        evidence_required: false,
+        evidence_type: "",
+        source_system: "",
+        portal_action: "Upload",
+        manual_upload_required: false,
+        mandatory: false,
+        compliance_weight: 1,
+        current_status: "In Progress",
+        region: userRegion || "",
+        calculated_due_date: "",
+        obligation_type: "Cyclic",
+      });
+      setNameSearchTerm("");
+      setFilteredNameOptions(obligationNameOptions);
+      setAddLoading(false);
+      
+      await fetchObligations();
+      await fetchObligationNameOptions();
+      
     } catch (error) {
       console.error("Error creating obligation:", error);
       setAddError(
         error.message || "Failed to create obligation. Please try again.",
       );
-    } finally {
+      toast.error(`❌ ${error.message || "Failed to create obligation. Please try again."}`);
       setAddLoading(false);
     }
   };
 
-  // Edit Functions
   const handleEditClick = (obligation) => {
     setEditingObligation(obligation);
     setEditFormData({
@@ -632,7 +720,7 @@ const ComplianceRegister = () => {
       manual_upload_required: obligation.manual_upload_required || false,
       mandatory: obligation.mandatory || false,
       compliance_weight: obligation.compliance_weight || 1,
-      current_status: obligation.current_status || "Not Started",
+      current_status: obligation.current_status || "In Progress",
       obligation_type: obligation.obligation_type || "Cyclic",
     });
     setEditError("");
@@ -679,21 +767,62 @@ const ComplianceRegister = () => {
 
       if (error) throw error;
 
+      // Update obligation_progress if user is regional
+      if (!isAdmin && userRegion) {
+        const regionId = await getRegionId(userRegion);
+        if (regionId) {
+          // Validate status for regional users
+          let progressStatus = editFormData.current_status;
+          if (progressStatus !== 'Completed' && progressStatus !== 'In Progress' && progressStatus !== 'Overdue') {
+            progressStatus = 'In Progress';
+          }
+
+          const { data: existingProgress } = await supabase
+            .from('obligation_progress')
+            .select('id')
+            .eq('obligation_id', editingObligation.id)
+            .eq('region_id', regionId)
+            .single();
+
+          if (existingProgress) {
+            await supabase
+              .from('obligation_progress')
+              .update({
+                status: progressStatus,
+                last_updated_at: new Date().toISOString(),
+                ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
+                ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
+              })
+              .eq('id', existingProgress.id);
+          } else {
+            await supabase
+              .from('obligation_progress')
+              .insert({
+                obligation_id: editingObligation.id,
+                region_id: regionId,
+                status: progressStatus,
+                ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
+                ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
+              });
+          }
+        }
+      }
+
       await fetchObligations();
       setShowEditModal(false);
       setEditingObligation(null);
-      alert("Obligation updated successfully!");
+      setEditLoading(false);
+      toast.success(`✅ Obligation updated successfully!`);
     } catch (error) {
       console.error("Error updating obligation:", error);
       setEditError(
         error.message || "Failed to update obligation. Please try again.",
       );
-    } finally {
+      toast.error(`❌ ${error.message || "Failed to update obligation. Please try again."}`);
       setEditLoading(false);
     }
   };
 
-  // Delete Functions
   const handleDeleteClick = (obligation) => {
     setDeletingObligation(obligation);
     setDeleteError("");
@@ -705,36 +834,15 @@ const ComplianceRegister = () => {
     setDeleteError("");
 
     try {
-      const { data: instances, error: instancesError } = await supabase
-        .from("obligation_instances")
-        .select("id")
-        .eq("obligation_id", deletingObligation.id);
+      const obligationId = deletingObligation.obligation_id;
+      
+      // Delete from obligation_progress
+      await supabase
+        .from('obligation_progress')
+        .delete()
+        .eq('obligation_id', deletingObligation.id);
 
-      if (instancesError) throw instancesError;
-
-      if (instances && instances.length > 0) {
-        const { error: deleteInstancesError } = await supabase
-          .from("obligation_instances")
-          .delete()
-          .eq("obligation_id", deletingObligation.id);
-
-        if (deleteInstancesError) throw deleteInstancesError;
-
-        const { error: deleteEvidenceError } = await supabase
-          .from("evidence")
-          .delete()
-          .eq("obligation_id", deletingObligation.id);
-
-        if (deleteEvidenceError) throw deleteEvidenceError;
-
-        const { error: deleteActivityError } = await supabase
-          .from("activity_history")
-          .delete()
-          .eq("obligation_id", deletingObligation.id);
-
-        if (deleteActivityError) throw deleteActivityError;
-      }
-
+      // Delete from obligations
       const { error: deleteError } = await supabase
         .from("obligations")
         .delete()
@@ -743,41 +851,76 @@ const ComplianceRegister = () => {
       if (deleteError) throw deleteError;
 
       await fetchObligations();
+      await fetchObligationNameOptions();
       setShowDeleteModal(false);
       setDeletingObligation(null);
-      alert("Obligation deleted successfully!");
+      setDeleteLoading(false);
+      toast.success(`Obligation ${obligationId} deleted successfully!`);
     } catch (error) {
       console.error("Error deleting obligation:", error);
       setDeleteError(
         error.message || "Failed to delete obligation. Please try again.",
       );
-    } finally {
+      toast.error(`❌ ${error.message || "Failed to delete obligation. Please try again."}`);
       setDeleteLoading(false);
     }
   };
 
-  // Clear filters function
   const clearFilters = () => {
     setSearchTerm("");
     setFilterStatus("all");
     setFilterFrequency("all");
     setFilterDomain("all");
+    setSortField(null);
+    setSortDirection('asc');
     navigate('/compliance', { replace: true });
+    toast.info("Filters cleared");
   };
 
-  // Filter obligations based on active tab using obligation_type column
-  const getFilteredObligations = () => {
+  // Handle sort
+  const handleSort = (field) => {
+    if (sortField === field) {
+      // Toggle direction if same field
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
+    } else {
+      // New field, set to ascending
+      setSortField(field);
+      setSortDirection('asc');
+    }
+  };
+
+  // Get sort icon
+  const getSortIcon = (field) => {
+    if (sortField !== field) {
+      return (
+        <svg className="h-3 w-3 inline ml-1 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+        </svg>
+      );
+    }
+    return sortDirection === 'asc' ? (
+      <svg className="h-3 w-3 inline ml-1 text-[#8cc63e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 15l7-7 7 7" />
+      </svg>
+    ) : (
+      <svg className="h-3 w-3 inline ml-1 text-[#8cc63e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" />
+      </svg>
+    );
+  };
+
+  // Filter and sort obligations
+  const getFilteredAndSortedObligations = () => {
     let filtered = obligations;
 
-    // Filter by tab using obligation_type column
     if (activeTab === "Cyclic") {
       filtered = filtered.filter(o => o.obligation_type === "Cyclic");
     } else if (activeTab === "Event") {
       filtered = filtered.filter(o => o.obligation_type === "Event");
     }
 
-    // Apply search, status, frequency, domain filters
-    return filtered.filter((obligation) => {
+    // Apply filters
+    filtered = filtered.filter((obligation) => {
       const matchesSearch =
         obligation.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
         obligation.description
@@ -796,11 +939,43 @@ const ComplianceRegister = () => {
 
       return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
     });
+
+    // Apply sorting
+    if (sortField) {
+      filtered.sort((a, b) => {
+        let aVal, bVal;
+        
+        if (sortField === 'dueDate') {
+          aVal = a.calculated_due_date ? new Date(a.calculated_due_date).getTime() : Infinity;
+          bVal = b.calculated_due_date ? new Date(b.calculated_due_date).getTime() : Infinity;
+        } else if (sortField === 'status') {
+          // Status priority order: Completed, In Progress, Pending, Due Today, Not Started, Overdue
+          const statusOrder = {
+            'Completed': 1,
+            'In Progress': 2,
+            'Pending': 3,
+            'Due Today': 4,
+            'Not Started': 5,
+            'Overdue': 6
+          };
+          aVal = statusOrder[a.current_status] || 999;
+          bVal = statusOrder[b.current_status] || 999;
+        } else {
+          aVal = a[sortField] || '';
+          bVal = b[sortField] || '';
+        }
+
+        if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return filtered;
   };
 
-  const filteredObligations = getFilteredObligations();
+  const filteredObligations = getFilteredAndSortedObligations();
 
-  // Get counts for tabs using obligation_type column
   const getCyclicCount = () => {
     return obligations.filter(o => o.obligation_type === "Cyclic").length;
   };
@@ -829,7 +1004,21 @@ const ComplianceRegister = () => {
           </h1>
           <p className="text-sm text-gray-500 mt-1">
             {filteredObligations.length} obligations found
-            {filterStatus !== "all" && (
+            {!isAdmin && userRegion && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                  Region: {userRegion}
+                </span>
+              </span>
+            )}
+            {isAdmin && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                  Admin - All Regions
+                </span>
+              </span>
+            )}
+            {filterStatus !== "all" && activeTab === "Cyclic" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
                   Filtered by: {filterStatus}
@@ -842,10 +1031,26 @@ const ComplianceRegister = () => {
                 </button>
               </span>
             )}
+            {sortField && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
+                  Sorted by: {sortField === 'dueDate' ? 'Due Date' : 'Status'} ({sortDirection === 'asc' ? '↑' : '↓'})
+                </span>
+                <button
+                  onClick={() => {
+                    setSortField(null);
+                    setSortDirection('asc');
+                  }}
+                  className="ml-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
           </p>
         </div>
-        {isAdmin && (
-          <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
+          {isAdmin && (
             <button
               onClick={() => handleAddClick("Cyclic")}
               className="bg-[#8cc63e] text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center text-xs sm:text-sm"
@@ -866,6 +1071,8 @@ const ComplianceRegister = () => {
               <span className="hidden xs:inline">Add Cyclic Based</span>
               <span className="xs:hidden">Cyclic</span>
             </button>
+          )}
+          {canAddEvent && (
             <button
               onClick={() => handleAddClick("Event")}
               className="bg-orange-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-orange-600 transition-colors flex items-center text-xs sm:text-sm"
@@ -886,8 +1093,8 @@ const ComplianceRegister = () => {
               <span className="hidden xs:inline">Add Event Based</span>
               <span className="xs:hidden">Event</span>
             </button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -922,71 +1129,74 @@ const ComplianceRegister = () => {
         </nav>
       </div>
 
-      {/* Filters - Responsive Grid */}
-      <div className="bg-white rounded-lg shadow p-3">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-          <div>
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search..."
-              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-            />
-          </div>
-          <div>
-            <select
-              value={filterStatus}
-              onChange={(e) => {
-                setFilterStatus(e.target.value);
-                const params = new URLSearchParams(location.search);
-                if (e.target.value === "all") {
-                  params.delete('status');
-                } else {
-                  params.set('status', e.target.value);
-                }
-                navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
-              }}
-              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-            >
-              <option value="all">All Statuses</option>
-              <option value="Not Started">Not Started</option>
-              <option value="Pending">Pending</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Completed">Completed</option>
-              <option value="Overdue">Overdue</option>
-            </select>
-          </div>
-          <div>
-            <select
-              value={filterFrequency}
-              onChange={(e) => setFilterFrequency(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-            >
-              {getFrequencies().map((freq) => (
-                <option key={freq} value={freq}>
-                  {freq === "all" ? "All Frequencies" : freq}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <select
-              value={filterDomain}
-              onChange={(e) => setFilterDomain(e.target.value)}
-              className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-            >
-              {getDomains().map((domain) => (
-                <option key={domain} value={domain}>
-                  {domain === "all" ? "All Domains" : domain}
-                </option>
-              ))}
-            </select>
+      {/* Filters - Only show for Cyclic tab */}
+      {activeTab === "Cyclic" && (
+        <div className="bg-white rounded-lg shadow p-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+            <div>
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search..."
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              />
+            </div>
+            <div>
+              <select
+                value={filterStatus}
+                onChange={(e) => {
+                  setFilterStatus(e.target.value);
+                  const params = new URLSearchParams(location.search);
+                  if (e.target.value === "all") {
+                    params.delete('status');
+                  } else {
+                    params.set('status', e.target.value);
+                  }
+                  navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+                }}
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                <option value="all">All Statuses</option>
+                <option value="Not Started">Not Started</option>
+                <option value="Pending">Pending</option>
+                <option value="In Progress">In Progress</option>
+                <option value="Completed">Completed</option>
+                <option value="Overdue">Overdue</option>
+                <option value="Due Today">Due Today</option>
+              </select>
+            </div>
+            <div>
+              <select
+                value={filterFrequency}
+                onChange={(e) => setFilterFrequency(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                {getFrequencies().map((freq) => (
+                  <option key={freq} value={freq}>
+                    {freq === "all" ? "All Frequencies" : freq}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <select
+                value={filterDomain}
+                onChange={(e) => setFilterDomain(e.target.value)}
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                {getDomains().map((domain) => (
+                  <option key={domain} value={domain}>
+                    {domain === "all" ? "All Domains" : domain}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Table - Compact and Responsive */}
+      {/* Table */}
       <div className="bg-white rounded-lg shadow overflow-hidden">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
@@ -1004,187 +1214,205 @@ const ComplianceRegister = () => {
                 <th className="hidden md:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
                   Freq
                 </th>
-                <th className="hidden lg:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Due Date
+                <th 
+                  className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
+                  onClick={() => handleSort('dueDate')}
+                >
+                  <div className="flex items-center">
+                    Due Date
+                    {getSortIcon('dueDate')}
+                  </div>
                 </th>
-                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Status
+                <th 
+                  className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
+                  onClick={() => handleSort('status')}
+                >
+                  <div className="flex items-center">
+                    Status
+                    {getSortIcon('status')}
+                  </div>
                 </th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredObligations.map((obligation) => {
-                const dueDate = getNextDueDate(obligation);
-                const isOverdue = isDueDateOverdue(dueDate);
-                const dueDateColor = getDueDateColor(dueDate);
+              {filteredObligations.length === 0 ? (
+                <tr>
+                  <td colSpan="6" className="px-2 py-8 text-center text-gray-500 text-sm">
+                    {activeTab === "Event" 
+                      ? "No event obligations found. Click 'Add Event Based' to create one."
+                      : !isAdmin && userRegion 
+                        ? `No obligations found for region: ${userRegion}`
+                        : "No obligations found matching your filters."}
+                  </td>
+                </tr>
+              ) : (
+                filteredObligations.map((obligation) => {
+                  const dueDate = obligation.calculated_due_date;
+                  const isOverdue = isDueDateOverdue(dueDate);
+                  const dueDateColor = getDueDateColor(dueDate);
 
-                return (
-                  <tr
-                    key={obligation.id}
-                    className="hover:bg-gray-50 transition-colors relative"
-                    onMouseEnter={() => setHoveredObligation(obligation.id)}
-                    onMouseLeave={() => setHoveredObligation(null)}
-                  >
-                    <td className="px-2 py-2 whitespace-nowrap">
-                      <div className="flex items-center space-x-1">
-                        <Link
-                          to={`/compliance/${obligation.obligation_id}`}
-                          className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
-                          title="View"
-                        >
-                          <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                          </svg>
-                        </Link>
-                        {isAdmin && (
-                          <>
-                            <button
-                              onClick={() => handleEditClick(obligation)}
-                              className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-                              title="Edit"
-                            >
-                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                              </svg>
-                            </button>
-                            <button
-                              onClick={() => handleDeleteClick(obligation)}
-                              className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-                              title="Delete"
-                            >
-                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-2 py-2 relative max-w-[100px] sm:max-w-[150px] md:max-w-[200px]">
-                      <div className="text-xs sm:text-sm font-medium text-gray-900 truncate">
-                        {obligation.name}
-                      </div>
-                      <div className="text-[10px] text-gray-500 truncate hidden sm:block">
-                        {obligation.description?.substring(0, 40)}...
-                      </div>
-                      
-                      {/* Hover Tooltip with Full Details */}
-                      {hoveredObligation === obligation.id && (
-                        <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
-                          <div className="space-y-1.5">
-                            <div className="flex justify-between items-start">
-                              <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
-                              <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(obligation.current_status)}`}>
-                                {obligation.current_status}
-                              </span>
-                            </div>
-                            <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
-                            <div className="grid grid-cols-2 gap-1 text-[10px]">
-                              <div>
-                                <span className="font-medium text-gray-500">ID:</span>
-                                <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
+                  return (
+                    <tr
+                      key={obligation.id}
+                      className="hover:bg-gray-50 transition-colors relative"
+                      onMouseEnter={() => setHoveredObligation(obligation.id)}
+                      onMouseLeave={() => setHoveredObligation(null)}
+                    >
+                      <td className="px-2 py-2 whitespace-nowrap">
+                        <div className="flex items-center space-x-1">
+                          <Link
+                            to={`/compliance/${obligation.obligation_id}`}
+                            className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
+                            title="View Details"
+                          >
+                            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                            </svg>
+                          </Link>
+                          {isAdmin && (
+                            <>
+                              <button
+                                onClick={() => handleEditClick(obligation)}
+                                className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                                title="Edit"
+                              >
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                              <button
+                                onClick={() => handleDeleteClick(obligation)}
+                                className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                                title="Delete"
+                              >
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 relative max-w-[100px] sm:max-w-[150px] md:max-w-[200px]">
+                        <div className="text-xs sm:text-sm font-medium text-gray-900 truncate">
+                          {obligation.name}
+                        </div>
+                        <div className="text-[10px] text-gray-500 truncate hidden sm:block">
+                          {obligation.description?.substring(0, 40)}...
+                        </div>
+                        
+                        {/* Hover Tooltip */}
+                        {hoveredObligation === obligation.id && (
+                          <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
+                            <div className="space-y-1.5">
+                              <div className="flex justify-between items-start">
+                                <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
+                                <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(obligation.current_status)}`}>
+                                  {obligation.current_status}
+                                </span>
                               </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Type:</span>
-                                <span className="ml-1 text-gray-700">{obligation.obligation_type}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Domain:</span>
-                                <span className="ml-1 text-gray-700">{obligation.domain}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Freq:</span>
-                                <span className="ml-1 text-gray-700">{obligation.frequency}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Due:</span>
-                                <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Responsible:</span>
-                                <span className="ml-1 text-gray-700">{obligation.responsible}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Accountable:</span>
-                                <span className="ml-1 text-gray-700">{obligation.accountable}</span>
-                              </div>
-                              <div>
-                                <span className="font-medium text-gray-500">Weight:</span>
-                                <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
-                              </div>
-                              <div className="col-span-2">
-                                <span className="font-medium text-gray-500">Clause:</span>
-                                <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
-                              </div>
-                              <div className="col-span-2">
-                                <span className="font-medium text-gray-500">Region:</span>
-                                <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
-                              </div>
-                              {obligation.evidence_required && (
-                                <div className="col-span-2">
-                                  <span className="font-medium text-gray-500">Evidence:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.evidence_type || 'Required'}</span>
+                              <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
+                              <div className="grid grid-cols-2 gap-1 text-[10px]">
+                                <div>
+                                  <span className="font-medium text-gray-500">ID:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
                                 </div>
-                              )}
-                              {obligation.mandatory && (
-                                <div className="col-span-2">
-                                  <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
-                                    Mandatory
-                                  </span>
+                                <div>
+                                  <span className="font-medium text-gray-500">Type:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.obligation_type}</span>
                                 </div>
-                              )}
+                                <div>
+                                  <span className="font-medium text-gray-500">Domain:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.domain}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-gray-500">Freq:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.frequency}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-gray-500">Due:</span>
+                                  <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-gray-500">Responsible:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.responsible}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-gray-500">Accountable:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.accountable}</span>
+                                </div>
+                                <div>
+                                  <span className="font-medium text-gray-500">Weight:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
+                                </div>
+                                <div className="col-span-2">
+                                  <span className="font-medium text-gray-500">Clause:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
+                                </div>
+                                <div className="col-span-2">
+                                  <span className="font-medium text-gray-500">Region:</span>
+                                  <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
+                                </div>
+                                {obligation.evidence_required && (
+                                  <div className="col-span-2">
+                                    <span className="font-medium text-gray-500">Evidence:</span>
+                                    <span className="ml-1 text-gray-700">{obligation.evidence_type || 'Required'}</span>
+                                  </div>
+                                )}
+                                {obligation.mandatory && (
+                                  <div className="col-span-2">
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
+                                      Mandatory
+                                    </span>
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                    </td>
-                    <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
-                      <span className="text-xs text-gray-900">
-                        {obligation.domain}
-                      </span>
-                    </td>
-                    <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
-                      <span
-                        className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
-                      >
-                        {obligation.frequency}
-                      </span>
-                    </td>
-                    <td className="hidden lg:table-cell px-2 py-2 whitespace-nowrap">
-                      <div className="flex items-center space-x-1">
-                        <span className={`text-xs ${dueDateColor}`}>
-                          {formatDate(dueDate)}
-                        </span>
-                        {isOverdue && dueDate !== "N/A" && (
-                          <span className="inline-flex items-center px-1 py-0.5 rounded-full text-[9px] font-medium bg-red-100 text-red-800">
-                            Overdue
-                          </span>
                         )}
-                      </div>
-                    </td>
-                    <td className="px-2 py-2 whitespace-nowrap">
-                      <span
-                        className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
-                      >
-                        {obligation.current_status}
-                      </span>
-                    </td>
-                  </tr>
-                );
-              })}
+                      </td>
+                      <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
+                        <span className="text-xs text-gray-900">
+                          {obligation.domain}
+                        </span>
+                      </td>
+                      <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
+                        <span
+                          className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
+                        >
+                          {obligation.frequency}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap">
+                        <div className="flex items-center space-x-1">
+                          <span className={`text-xs ${dueDateColor}`}>
+                            {formatDate(dueDate)}
+                          </span>
+                          {isOverdue && dueDate && (
+                            <span className="inline-flex items-center px-1 py-0.5 rounded-full text-[9px] font-medium bg-red-100 text-red-800">
+                              Overdue
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 whitespace-nowrap">
+                        <span
+                          className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
+                        >
+                          {obligation.current_status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })
+              )}
             </tbody>
           </table>
         </div>
-        {filteredObligations.length === 0 && (
-          <div className="text-center py-6 text-gray-500 text-sm">
-            No obligations found matching your filters.
-          </div>
-        )}
       </div>
 
-      {/* Add New Obligation Modal - Fully Responsive */}
-      {showAddModal && isAdmin && (
+      {/* Add New Obligation Modal */}
+      {showAddModal && (isAdmin || canAddEvent) && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center z-10">
@@ -1223,7 +1451,7 @@ const ComplianceRegister = () => {
                 </div>
               )}
 
-              {/* For Event Based obligations, show template selector */}
+              {/* Event template selector */}
               {addFormData.obligation_type === "Event" && eventTemplates.length > 0 && (
                 <div className="mb-4 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-md">
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1274,7 +1502,7 @@ const ComplianceRegister = () => {
                   <select
                     name="policy_id"
                     value={addFormData.policy_id || ""}
-                    onChange={handlePolicyChange}
+                    onChange={handleAddInputChange}
                     required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
@@ -1328,7 +1556,9 @@ const ComplianceRegister = () => {
                     )}
                   </div>
                   <p className="text-xs text-gray-500 mt-1">
-                    Start typing to search existing obligation names
+                    {addFormData.obligation_type === "Event" 
+                      ? "Select from existing Event obligations to auto-fill fields" 
+                      : "Start typing to search existing obligation names"}
                   </p>
                 </div>
 
@@ -1448,16 +1678,44 @@ const ComplianceRegister = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Region
+                    Calculated Due Date
                   </label>
                   <input
-                    type="text"
-                    name="region"
-                    value={addFormData.region}
+                    type="date"
+                    name="calculated_due_date"
+                    value={addFormData.calculated_due_date || ""}
                     onChange={handleAddInputChange}
-                    placeholder="e.g., North America"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Region
+                  </label>
+                  {isAdmin ? (
+                    <input
+                      type="text"
+                      name="region"
+                      value={addFormData.region}
+                      onChange={handleAddInputChange}
+                      placeholder="e.g., Region C1, Region C2"
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                    />
+                  ) : (
+                    <input
+                      type="text"
+                      name="region"
+                      value={userRegion || ""}
+                      disabled
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-100 text-gray-600 cursor-not-allowed"
+                    />
+                  )}
+                  {!isAdmin && userRegion && (
+                    <p className="text-xs text-gray-500 mt-1">
+                      Region: {userRegion} (auto-assigned)
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -1476,6 +1734,7 @@ const ComplianceRegister = () => {
                     <option value="In Progress">In Progress</option>
                     <option value="Completed">Completed</option>
                     <option value="Overdue">Overdue</option>
+                    <option value="Due Today">Due Today</option>
                   </select>
                 </div>
 
@@ -1616,7 +1875,13 @@ const ComplianceRegister = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowAddModal(false)}
+                  onClick={() => {
+                    setShowAddModal(false);
+                    setAddError("");
+                    setAddSuccess("");
+                    setNameSearchTerm("");
+                    setSelectedTemplate(null);
+                  }}
                   className="w-full xs:flex-1 bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm sm:text-base"
                 >
                   Cancel
@@ -1715,18 +1980,13 @@ const ComplianceRegister = () => {
                     required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    {editFormData.obligation_type === "Cyclic" ? (
-                      <>
-                        <option value="Monthly">Monthly</option>
-                        <option value="Quarterly">Quarterly</option>
-                        <option value="Yearly">Yearly</option>
-                        <option value="Annual">Annual</option>
-                        <option value="Bi-Annual">Bi-Annual</option>
-                        <option value="Continuous">Continuous</option>
-                      </>
-                    ) : (
-                      <option value="Event Based">Event Based</option>
-                    )}
+                    <option value="Monthly">Monthly</option>
+                    <option value="Quarterly">Quarterly</option>
+                    <option value="Yearly">Yearly</option>
+                    <option value="Annual">Annual</option>
+                    <option value="Bi-Annual">Bi-Annual</option>
+                    <option value="Continuous">Continuous</option>
+                    <option value="Event Based">Event Based</option>
                   </select>
                 </div>
 
@@ -1832,6 +2092,7 @@ const ComplianceRegister = () => {
                     <option value="In Progress">In Progress</option>
                     <option value="Completed">Completed</option>
                     <option value="Overdue">Overdue</option>
+                    <option value="Due Today">Due Today</option>
                   </select>
                 </div>
 

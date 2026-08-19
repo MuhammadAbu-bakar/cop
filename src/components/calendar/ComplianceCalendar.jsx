@@ -1,7 +1,14 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { getObligations } from "../../api/compliance";
+import { useAuth } from "../../context/AuthContext";
 
 const ComplianceCalendar = () => {
+  const navigate = useNavigate();
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+  const userRegion = profile?.region_name || null;
+  
   const [view, setView] = useState("month");
   const [currentDate, setCurrentDate] = useState(new Date());
   const [obligations, setObligations] = useState([]);
@@ -9,7 +16,7 @@ const ComplianceCalendar = () => {
   const [selectedDate, setSelectedDate] = useState(null);
   const [selectedObligations, setSelectedObligations] = useState([]);
 
-  // Fetch obligations
+  // Fetch obligations with region filtering
   useEffect(() => {
     fetchCalendarData();
   }, []);
@@ -17,8 +24,14 @@ const ComplianceCalendar = () => {
   const fetchCalendarData = async () => {
     setLoading(true);
     try {
-      // Fetch all obligations with calculated_due_date
-      const { data: obligationsData, error } = await getObligations();
+      // Fetch all obligations with region filtering
+      // Status comes from obligation_progress via getObligations
+      const { data: obligationsData, error } = await getObligations(
+        {}, // filters
+        userRegion, // user's region
+        isAdmin // is admin
+      );
+      
       if (error) throw error;
       
       // Filter obligations that have a calculated_due_date
@@ -33,6 +46,7 @@ const ComplianceCalendar = () => {
       const obligationsWithOverdue = obligationsWithDueDate.map((obligation) => {
         const dueDate = new Date(obligation.calculated_due_date);
         dueDate.setHours(0, 0, 0, 0);
+        // Status is from obligation_progress (merged via getObligations)
         const isOverdue = dueDate < today && obligation.current_status !== "Completed";
         return {
           ...obligation,
@@ -46,6 +60,34 @@ const ComplianceCalendar = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Get obligations for the current month
+  const getCurrentMonthObligations = () => {
+    const year = currentDate.getFullYear();
+    const month = currentDate.getMonth();
+    
+    return obligations.filter((obligation) => {
+      if (!obligation.calculated_due_date) return false;
+      const dueDate = new Date(obligation.calculated_due_date);
+      return dueDate.getFullYear() === year && dueDate.getMonth() === month;
+    });
+  };
+
+  // Calculate stats for the current month from obligation_progress
+  const getMonthStats = () => {
+    const monthObligations = getCurrentMonthObligations();
+    const total = monthObligations.length;
+    
+    // Status comes from obligation_progress via getObligations
+    // Only three statuses are possible: 'Completed', 'In Progress', 'Overdue'
+    const completed = monthObligations.filter(o => o.current_status === "Completed").length;
+    const overdue = monthObligations.filter(o => o.isOverdue || o.current_status === "Overdue").length;
+    const inProgress = monthObligations.filter(o => 
+      o.current_status === "In Progress" && !o.isOverdue
+    ).length;
+    
+    return { total, completed, overdue, inProgress };
   };
 
   const getTypeBadge = (frequency) => {
@@ -108,6 +150,11 @@ const ComplianceCalendar = () => {
   const handleDateClick = (dateStr, dayObligations) => {
     setSelectedDate(dateStr);
     setSelectedObligations(dayObligations);
+  };
+
+  // Navigate to obligation details page
+  const navigateToObligation = (obligationId) => {
+    navigate(`/compliance/${obligationId}`);
   };
 
   // Helper function to format date consistently
@@ -183,7 +230,14 @@ const ComplianceCalendar = () => {
           </div>
           <div className="mt-0.5 sm:mt-1 space-y-0.5 max-h-10 sm:max-h-14 md:max-h-16 overflow-y-auto">
             {dayObligations.slice(0, 2).map((obligation) => (
-              <div key={obligation.id} className={`text-[8px] sm:text-xs truncate ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}>
+              <div 
+                key={obligation.id} 
+                className={`text-[8px] sm:text-xs truncate ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigateToObligation(obligation.obligation_id);
+                }}
+              >
                 <span className={`font-medium ${obligation.isOverdue ? "text-red-600" : ""}`}>
                   {obligation.name || "Unknown"}
                 </span>
@@ -327,6 +381,9 @@ const ComplianceCalendar = () => {
             const overdue = monthObligations.filter(
               (o) => o.isOverdue
             ).length;
+            const inProgress = monthObligations.filter(
+              (o) => o.current_status === "In Progress" && !o.isOverdue
+            ).length;
 
             return (
               <div key={monthName} className="border rounded-lg p-3 sm:p-4 hover:shadow-md transition-shadow">
@@ -353,6 +410,12 @@ const ComplianceCalendar = () => {
                         {completed}/{monthObligations.length}
                       </span>
                     </div>
+                    <div className="flex justify-between text-xs sm:text-sm mb-1 sm:mb-2">
+                      <span className="text-gray-600">In Progress:</span>
+                      <span className="font-medium text-blue-600">
+                        {inProgress}/{monthObligations.length}
+                      </span>
+                    </div>
                     {overdue > 0 && (
                       <div className="flex justify-between text-xs sm:text-sm mb-1 sm:mb-2">
                         <span className="text-gray-600">Overdue:</span>
@@ -374,9 +437,10 @@ const ComplianceCalendar = () => {
                       {monthObligations.slice(0, 3).map((obligation) => (
                         <div
                           key={obligation.id}
-                          className={`rounded p-1.5 sm:p-2 hover:bg-gray-100 transition-colors ${
+                          className={`rounded p-1.5 sm:p-2 hover:bg-gray-100 transition-colors cursor-pointer ${
                             obligation.isOverdue ? "bg-red-50 border-l-2 sm:border-l-4 border-l-red-500" : "bg-gray-50"
                           }`}
+                          onClick={() => navigateToObligation(obligation.obligation_id)}
                         >
                           <div className="flex justify-between items-start">
                             <p className={`text-[10px] sm:text-xs font-medium truncate flex-1 ${
@@ -495,6 +559,9 @@ const ComplianceCalendar = () => {
             const overdue = monthObligations.filter(
               (o) => o.isOverdue
             ).length;
+            const inProgress = monthObligations.filter(
+              (o) => o.current_status === "In Progress" && !o.isOverdue
+            ).length;
             const isCurrentMonth = index === currentMonth && new Date().getFullYear() === year;
 
             return (
@@ -532,6 +599,12 @@ const ComplianceCalendar = () => {
                         {completed}/{monthObligations.length}
                       </span>
                     </div>
+                    <div className="flex justify-between text-[10px] sm:text-sm">
+                      <span className="text-gray-600">In Progress:</span>
+                      <span className="font-medium text-blue-600">
+                        {inProgress}/{monthObligations.length}
+                      </span>
+                    </div>
                     {overdue > 0 && (
                       <div className="flex justify-between text-[10px] sm:text-sm">
                         <span className="text-gray-600">Overdue:</span>
@@ -551,7 +624,11 @@ const ComplianceCalendar = () => {
                     </div>
                     <div className="mt-1 sm:mt-2 space-y-0.5 sm:space-y-1 max-h-24 sm:max-h-32 overflow-y-auto">
                       {monthObligations.slice(0, 2).map((obligation) => (
-                        <div key={obligation.id} className={`text-[9px] sm:text-xs truncate ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}>
+                        <div 
+                          key={obligation.id} 
+                          className={`text-[9px] sm:text-xs truncate cursor-pointer ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
+                          onClick={() => navigateToObligation(obligation.obligation_id)}
+                        >
                           <span className={`font-medium ${obligation.isOverdue ? "text-red-600" : ""}`}>
                             {obligation.name || "Unknown"}
                           </span>
@@ -620,9 +697,14 @@ const ComplianceCalendar = () => {
               {selectedObligations.map((obligation) => (
                 <div
                   key={obligation.id}
-                  className={`border rounded-lg p-3 sm:p-4 hover:shadow-md transition-shadow ${
+                  className={`border rounded-lg p-3 sm:p-4 hover:shadow-md transition-shadow cursor-pointer ${
                     obligation.isOverdue ? "border-red-300 bg-red-50/50" : "bg-white"
                   }`}
+                  onClick={() => {
+                    setSelectedDate(null);
+                    setSelectedObligations([]);
+                    navigateToObligation(obligation.obligation_id);
+                  }}
                 >
                   <div className="flex flex-col sm:flex-row justify-between items-start">
                     <div className="flex-1 w-full sm:w-auto">
@@ -687,6 +769,13 @@ const ComplianceCalendar = () => {
                             </span>
                           )}
                         </div>
+                        {/* Show region for admin */}
+                        {isAdmin && obligation.region && (
+                          <div className="col-span-1 xs:col-span-2">
+                            <span className="font-medium text-gray-500">Region:</span>
+                            <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.region}</span>
+                          </div>
+                        )}
                       </div>
                     </div>
                     {obligation.due_date_rule && (
@@ -694,6 +783,11 @@ const ComplianceCalendar = () => {
                         <p className="text-[9px] sm:text-xs text-gray-600 italic">"{obligation.due_date_rule}"</p>
                       </div>
                     )}
+                  </div>
+                  <div className="mt-2 pt-2 border-t border-gray-100">
+                    <span className="text-[10px] sm:text-xs text-[#8cc63e] font-medium hover:underline">
+                      Click to view details and upload evidence →
+                    </span>
                   </div>
                 </div>
               ))}
@@ -727,16 +821,8 @@ const ComplianceCalendar = () => {
     );
   }
 
-  // Calculate stats
-  const totalObligations = obligations.length;
-  const completedObligations = obligations.filter(o => o.current_status === "Completed").length;
-  const overdueObligations = obligations.filter(o => o.isOverdue).length;
-  const pendingObligations = obligations.filter(o => 
-    (o.current_status === "Pending" || o.current_status === "In Progress") && !o.isOverdue
-  ).length;
-  const notStartedObligations = obligations.filter(o => 
-    o.current_status === "Not Started" && !o.isOverdue
-  ).length;
+  // Get stats for the current month from obligation_progress
+  const monthStats = getMonthStats();
 
   return (
     <div className="space-y-4 sm:space-y-6 p-2 sm:p-4 md:p-6">
@@ -745,7 +831,21 @@ const ComplianceCalendar = () => {
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Compliance Calendar</h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">
-            {totalObligations} obligations with calculated due dates
+            {currentDate.toLocaleString("default", { month: "long" })} {currentDate.getFullYear()} - {monthStats.total} obligations
+            {!isAdmin && userRegion && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                  Region: {userRegion}
+                </span>
+              </span>
+            )}
+            {isAdmin && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                  Admin - All Regions
+                </span>
+              </span>
+            )}
           </p>
         </div>
         <div className="flex flex-wrap gap-1 sm:gap-2 w-full sm:w-auto">
@@ -805,27 +905,23 @@ const ComplianceCalendar = () => {
         </div>
       </div>
 
-      {/* Stats Summary - Responsive */}
-      <div className="grid grid-cols-2 xs:grid-cols-3 sm:grid-cols-5 gap-2 sm:gap-4">
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4">
+      {/* Stats Summary - Shows counts from obligation_progress */}
+      <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
+        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-gray-400">
           <p className="text-[10px] sm:text-sm text-gray-500">Total</p>
-          <p className="text-lg sm:text-2xl font-bold text-gray-900">{totalObligations}</p>
+          <p className="text-lg sm:text-2xl font-bold text-gray-900">{monthStats.total}</p>
         </div>
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4">
+        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-green-500">
           <p className="text-[10px] sm:text-sm text-gray-500">Completed</p>
-          <p className="text-lg sm:text-2xl font-bold text-green-600">{completedObligations}</p>
+          <p className="text-lg sm:text-2xl font-bold text-green-600">{monthStats.completed}</p>
         </div>
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4">
-          <p className="text-[10px] sm:text-sm text-gray-500">Pending</p>
-          <p className="text-lg sm:text-2xl font-bold text-yellow-600">{pendingObligations}</p>
+        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-blue-500">
+          <p className="text-[10px] sm:text-sm text-gray-500">In Progress</p>
+          <p className="text-lg sm:text-2xl font-bold text-blue-600">{monthStats.inProgress}</p>
         </div>
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4">
-          <p className="text-[10px] sm:text-sm text-gray-500">Not Started</p>
-          <p className="text-lg sm:text-2xl font-bold text-gray-600">{notStartedObligations}</p>
-        </div>
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-2 border-red-200 bg-red-50 col-span-2 xs:col-span-3 sm:col-span-1">
+        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-red-500 bg-red-50">
           <p className="text-[10px] sm:text-sm text-red-600 font-medium">⚠ Overdue</p>
-          <p className="text-lg sm:text-2xl font-bold text-red-600">{overdueObligations}</p>
+          <p className="text-lg sm:text-2xl font-bold text-red-600">{monthStats.overdue}</p>
         </div>
       </div>
 
@@ -855,13 +951,11 @@ const ComplianceCalendar = () => {
               <span className="text-[10px] sm:text-xs text-gray-600">Event Based</span>
             </div>
           </div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">Status:</span>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">Status (from obligation_progress):</span>
           <div className="flex flex-wrap gap-1.5 sm:gap-3">
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-green-100 text-green-800 rounded">Completed</span>
-            <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-yellow-100 text-yellow-800 rounded">Pending</span>
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-blue-100 text-blue-800 rounded">In Progress</span>
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-red-100 text-red-800 rounded font-bold">⚠ Overdue</span>
-            <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-gray-100 text-gray-800 rounded">Not Started</span>
           </div>
         </div>
       </div>

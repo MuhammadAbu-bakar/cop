@@ -1,10 +1,118 @@
-// ============================================================
-// ComplianceTrend.jsx - Line Chart using Recharts
-// ============================================================
-
+import { useState, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Area, ComposedChart } from 'recharts';
+import { supabase } from "../../api/supabase";
 
-const ComplianceTrend = ({ data }) => {
+const ComplianceTrend = ({ userRegion, isAdmin }) => {
+  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState([]);
+
+  useEffect(() => {
+    fetchTrendData();
+  }, [userRegion, isAdmin]);
+
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  const fetchTrendData = async () => {
+    setLoading(true);
+    try {
+      // Get region ID
+      let regionId = null;
+      if (!isAdmin && userRegion) {
+        regionId = await getRegionId(userRegion);
+      }
+
+      const months = [];
+      const currentDate = new Date();
+      
+      for (let i = 5; i >= 0; i--) {
+        const date = new Date(currentDate);
+        date.setMonth(date.getMonth() - i);
+        months.push({
+          month: date.toLocaleString('default', { month: 'short' }),
+          year: date.getFullYear(),
+          monthIndex: date.getMonth(),
+        });
+      }
+
+      const trendData = [];
+      
+      for (const month of months) {
+        const startDate = new Date(month.year, month.monthIndex, 1);
+        const endDate = new Date(month.year, month.monthIndex + 1, 0);
+        
+        let query = supabase
+          .from('obligations')
+          .select('id')
+          .gte('created_at', startDate.toISOString())
+          .lte('created_at', endDate.toISOString());
+
+        const { data: monthObligations } = await query;
+        const obligationIds = monthObligations?.map(o => o.id) || [];
+
+        let progressQuery = supabase
+          .from('obligation_progress')
+          .select('status')
+          .in('obligation_id', obligationIds)
+          .eq('status', 'Completed');
+
+        if (regionId) {
+          progressQuery = progressQuery.eq('region_id', regionId);
+        }
+
+        const { data: monthCompleted } = await progressQuery;
+
+        const total = obligationIds.length;
+        const completed = monthCompleted?.length || 0;
+        const compliance = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        trendData.push({
+          month: month.month,
+          value: compliance > 0 ? compliance : 0,
+        });
+      }
+
+      setData(trendData);
+
+    } catch (error) {
+      console.error('Error fetching trend data:', error);
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4 sm:p-5 md:p-6">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
+              Compliance Trend
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">Loading...</p>
+          </div>
+          <div className="h-8 w-16 bg-gray-200 rounded animate-pulse"></div>
+        </div>
+        <div className="h-48 sm:h-56 md:h-64 bg-gray-100 rounded animate-pulse"></div>
+      </div>
+    );
+  }
+
   if (!data || data.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow p-4 sm:p-5 md:p-6">
@@ -71,7 +179,6 @@ const ComplianceTrend = ({ data }) => {
               </linearGradient>
             </defs>
             
-            {/* Grid */}
             <CartesianGrid 
               strokeDasharray="3 3" 
               vertical={false}
@@ -79,7 +186,6 @@ const ComplianceTrend = ({ data }) => {
               strokeOpacity={0.5}
             />
             
-            {/* X-Axis */}
             <XAxis 
               dataKey="month" 
               axisLine={false}
@@ -88,7 +194,6 @@ const ComplianceTrend = ({ data }) => {
               dy={5}
             />
             
-            {/* Y-Axis */}
             <YAxis 
               domain={[minValue, maxValue]}
               axisLine={false}
@@ -99,10 +204,8 @@ const ComplianceTrend = ({ data }) => {
               width={30}
             />
             
-            {/* Tooltip */}
             <Tooltip content={<CustomTooltip />} />
             
-            {/* Area under the line */}
             <Area
               type="monotone"
               dataKey="value"
@@ -111,7 +214,6 @@ const ComplianceTrend = ({ data }) => {
               fillOpacity={1}
             />
             
-            {/* Line */}
             <Line
               type="monotone"
               dataKey="value"

@@ -7,14 +7,20 @@ import {
   addComment,
   getActivityHistory,
   updateObligationStatus,
+  updateRegionProgress,
+  uploadEvidence,
+  getRegionProgress,
 } from "../../api/compliance";
+import { toast } from 'react-toastify';
 
 const ObligationDetails = () => {
-  // Get params from URL - using 'id' because that's what's in the route
   const { id } = useParams();
-  const obligationId = id; // Rename for clarity
+  const obligationId = id;
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+  // FIXED: Use region_name instead of region_code
+  const userRegion = profile?.region_name || null;
   const fileInputRef = useRef(null);
   const templateFileInputRef = useRef(null);
 
@@ -32,14 +38,12 @@ const ObligationDetails = () => {
   const [templateLoading, setTemplateLoading] = useState(false);
   const [templateUploading, setTemplateUploading] = useState(false);
   const [templateUploadError, setTemplateUploadError] = useState("");
+  const [regionProgress, setRegionProgress] = useState(null);
 
   useEffect(() => {
     if (obligationId) {
-      console.log("Fetching obligation for ID:", obligationId);
       fetchObligationDetails();
     } else {
-      console.error("No obligation ID provided in URL");
-      console.log("Current URL:", window.location.pathname);
       setError("No obligation ID provided. Please check the URL.");
       setLoading(false);
     }
@@ -48,66 +52,77 @@ const ObligationDetails = () => {
   useEffect(() => {
     if (obligation) {
       fetchTemplates();
+      fetchRegionProgress();
     }
   }, [obligation]);
+
+  // FIXED: Get region ID from region name (not code)
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) {
+        console.error('Error getting region ID:', error);
+        return null;
+      }
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  const fetchRegionProgress = async () => {
+    if (!obligation || !userRegion || isAdmin) return;
+
+    try {
+      console.log('Fetching progress for region:', userRegion);
+      const result = await getRegionProgress(obligation.id, userRegion);
+      if (result.data) {
+        setRegionProgress(result.data);
+        console.log('Region progress:', result.data);
+      } else {
+        setRegionProgress(null);
+        console.log('No progress found for region:', userRegion);
+      }
+    } catch (error) {
+      console.error('Error fetching region progress:', error);
+    }
+  };
 
   const fetchObligationDetails = async () => {
     setLoading(true);
     setError(null);
     try {
-      console.log("Fetching obligation with ID:", obligationId);
-
-      // 1. Fetch obligation details directly using supabase
       const { data: obligationData, error: obligationError } = await supabase
         .from("obligations")
-        .select(
-          `
+        .select(`
           *,
           policy:policies(*)
-        `,
-        )
+        `)
         .eq("obligation_id", obligationId)
         .single();
 
       if (obligationError) {
         console.error("Error fetching obligation:", obligationError);
-        console.log("Looking for obligation_id:", obligationId);
-
-        // Try to fetch all obligations to see what's available
-        const { data: allObligations } = await supabase
-          .from("obligations")
-          .select("obligation_id, name")
-          .limit(10);
-
-        console.log("Available obligations:", allObligations);
-
-        if (allObligations && allObligations.length > 0) {
-          const availableIds = allObligations
-            .map((o) => o.obligation_id)
-            .join(", ");
-          setError(
-            `Obligation "${obligationId}" not found. Available IDs: ${availableIds}`,
-          );
-        } else {
-          setError(
-            `Obligation "${obligationId}" not found. No obligations exist in the database.`,
-          );
-        }
-        setLoading(false);
-        return;
-      }
-
-      if (!obligationData) {
-        console.log("No obligation found for ID:", obligationId);
         setError("Obligation not found");
         setLoading(false);
         return;
       }
 
-      console.log("Obligation found:", obligationData);
+      if (!obligationData) {
+        setError("Obligation not found");
+        setLoading(false);
+        return;
+      }
+
       setObligation(obligationData);
 
-      // 2. Fetch obligation instances
       const { data: instancesData, error: instancesError } = await supabase
         .from("obligation_instances")
         .select("*")
@@ -115,21 +130,15 @@ const ObligationDetails = () => {
         .order("due_date", { ascending: true });
 
       if (instancesError) {
-        console.error("Error fetching instances:", instancesError);
         setInstances([]);
       } else {
-        console.log("Instances found:", instancesData?.length || 0);
         setInstances(instancesData || []);
       }
 
-      // 3. Fetch evidence
-      const { data: evidenceData } = await getEvidence(obligationData.id);
+      const { data: evidenceData } = await getEvidence(obligationData.id, userRegion, isAdmin);
       setEvidence(evidenceData || []);
 
-      // 4. Fetch activity history
-      const { data: activityData } = await getActivityHistory(
-        obligationData.id,
-      );
+      const { data: activityData } = await getActivityHistory(obligationData.id);
       setActivities(activityData || []);
     } catch (error) {
       console.error("Error fetching obligation details:", error);
@@ -144,7 +153,6 @@ const ObligationDetails = () => {
     
     setTemplateLoading(true);
     try {
-      // Use bucket "template" with folder structure
       const folderPath = `obligations/${obligation.obligation_id}/templates/`;
       
       const { data, error } = await supabase.storage
@@ -152,15 +160,12 @@ const ObligationDetails = () => {
         .list(folderPath);
 
       if (error) {
-        console.error("Error fetching templates:", error);
         setTemplates([]);
         return;
       }
 
-      // Filter out folders and get only files
       const files = data.filter(item => !item.id.endsWith('/'));
       
-      // Get public URLs for each file
       const templatesWithUrls = await Promise.all(
         files.map(async (file) => {
           const { data: urlData } = supabase.storage
@@ -192,32 +197,29 @@ const ObligationDetails = () => {
     setTemplateUploading(true);
 
     try {
-      // Create folder path for this obligation's templates
       const folderPath = `obligations/${obligation.obligation_id}/templates/`;
       const filePath = `${folderPath}${file.name}`;
 
-      // Upload file to template bucket
-      const { data: uploadData, error: uploadError } = await supabase.storage
+      const { error: uploadError } = await supabase.storage
         .from("template")
         .upload(filePath, file, {
           cacheControl: "3600",
-          upsert: true, // Overwrite if exists
+          upsert: true,
         });
 
       if (uploadError) throw uploadError;
 
-      // Refresh templates list
       await fetchTemplates();
 
-      // Reset file input
       if (templateFileInputRef.current) {
         templateFileInputRef.current.value = "";
       }
 
-      alert(`Template "${file.name}" uploaded successfully!`);
+      toast.success(`Template "${file.name}" uploaded successfully!`);
     } catch (error) {
       console.error("Error uploading template:", error);
       setTemplateUploadError(error.message || "Failed to upload template");
+      toast.error("Failed to upload template");
     } finally {
       setTemplateUploading(false);
     }
@@ -225,11 +227,9 @@ const ObligationDetails = () => {
 
   const handleTemplateDownload = async (template) => {
     try {
-      // Download the file from template bucket
       const response = await fetch(template.url);
       const blob = await response.blob();
       
-      // Create download link
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -240,7 +240,7 @@ const ObligationDetails = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading template:", error);
-      alert("Failed to download template. Please try again.");
+      toast.error("Failed to download template. Please try again.");
     }
   };
 
@@ -254,12 +254,11 @@ const ObligationDetails = () => {
 
       if (error) throw error;
 
-      // Refresh templates list
       await fetchTemplates();
-      alert(`Template "${template.name}" deleted successfully!`);
+      toast.success(`Template "${template.name}" deleted successfully!`);
     } catch (error) {
       console.error("Error deleting template:", error);
-      alert("Failed to delete template. Please try again.");
+      toast.error("Failed to delete template. Please try again.");
     }
   };
 
@@ -273,6 +272,7 @@ const ObligationDetails = () => {
       Submitted: "bg-purple-100 text-purple-800",
       Approved: "bg-emerald-100 text-emerald-800",
       Closed: "bg-gray-100 text-gray-800",
+      "Due Today": "bg-orange-100 text-orange-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
   };
@@ -293,11 +293,26 @@ const ObligationDetails = () => {
   const handleStatusUpdate = async (newStatus) => {
     if (!obligation) return;
 
+    if (!isAdmin && userRegion) {
+      // Use the API function to update region progress
+      console.log(`Updating status to "${newStatus}" for region: ${userRegion}`);
+      const result = await updateRegionProgress(obligation.id, userRegion, newStatus, comment);
+      if (result.data) {
+        await fetchRegionProgress();
+        await fetchObligationDetails();
+        toast.success(`Status updated to "${newStatus}" for region ${userRegion}`);
+      } else {
+        toast.error("Failed to update status. Please try again.");
+      }
+      setComment("");
+      return;
+    }
+
     try {
       await updateObligationStatus(obligation.id, newStatus, comment);
 
       if (newStatus === "Completed" || newStatus === "Closed") {
-        const { error: updateInstancesError } = await supabase
+        await supabase
           .from("obligation_instances")
           .update({
             status: newStatus,
@@ -305,17 +320,14 @@ const ObligationDetails = () => {
           })
           .eq("obligation_id", obligation.id)
           .in("status", ["Pending", "In Progress"]);
-
-        if (updateInstancesError) {
-          console.error("Error updating instances:", updateInstancesError);
-        }
       }
 
       fetchObligationDetails();
       setComment("");
+      toast.success(`Status updated to "${newStatus}"`);
     } catch (error) {
       console.error("Error updating status:", error);
-      alert("Failed to update status. Please try again.");
+      toast.error("Failed to update status. Please try again.");
     }
   };
 
@@ -367,9 +379,10 @@ const ObligationDetails = () => {
 
       fetchObligationDetails();
       setComment("");
+      toast.success(`Instance status updated to "${status}"`);
     } catch (error) {
       console.error("Error updating instance status:", error);
-      alert("Failed to update instance status. Please try again.");
+      toast.error("Failed to update instance status. Please try again.");
     }
   };
 
@@ -499,6 +512,7 @@ const ObligationDetails = () => {
     setSelectedFile(file);
   };
 
+  // FIXED: Handle file upload using the API function
   const handleFileUpload = async () => {
     if (!selectedFile || !obligation) return;
 
@@ -506,75 +520,38 @@ const ObligationDetails = () => {
     setUploadError("");
 
     try {
-      // Get current user
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) throw new Error("User not authenticated");
+      console.log('Uploading evidence for obligation:', obligation.obligation_id);
+      console.log('User region name:', userRegion);
+      console.log('Is admin:', isAdmin);
 
-      // Create a unique file name
-      const fileName = `${Date.now()}_${selectedFile.name}`;
-      const filePath = `${obligation.obligation_id}/${fileName}`;
-
-      // Upload to Supabase Storage bucket "obligation_evidence"
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from("obligation_evidence")
-        .upload(filePath, selectedFile, {
-          cacheControl: "3600",
-          upsert: false,
-        });
-
-      if (uploadError) {
-        console.error("Upload error:", uploadError);
-        throw new Error(uploadError.message || "Failed to upload file");
+      // Check if user has a region
+      if (!isAdmin && !userRegion) {
+        throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
       }
 
-      // Get public URL
-      const { data: urlData } = supabase.storage
-        .from("obligation_evidence")
-        .getPublicUrl(filePath);
-
-      // Save evidence record to database
-      const { data: evidenceData, error: evidenceError } = await supabase
-        .from("evidence")
-        .insert({
-          obligation_id: obligation.id,
-          instance_id: null,
-          file_name: selectedFile.name,
-          file_url: urlData.publicUrl,
-          file_type: selectedFile.type,
-          file_size: selectedFile.size,
-          uploaded_by: user.id,
-          status: "Approved",
-          comments: "Evidence uploaded successfully",
-        })
-        .select();
-
-      if (evidenceError) throw evidenceError;
-
-      // Update obligation status to "Completed"
-      await updateObligationStatus(
+      // Use the API function from compliance.js
+      const result = await uploadEvidence(
+        selectedFile,
         obligation.id,
-        "Completed",
-        "Evidence uploaded and obligation completed",
+        null, // instanceId
+        userRegion,
+        isAdmin
       );
 
-      // Update all pending instances to Completed
-      await supabase
-        .from("obligation_instances")
-        .update({
-          status: "Completed",
-          updated_at: new Date().toISOString(),
-        })
-        .eq("obligation_id", obligation.id)
-        .in("status", ["Pending", "In Progress"]);
+      if (result.error) {
+        console.error('Upload error:', result.error);
+        throw new Error(result.error.message || "Failed to upload evidence");
+      }
 
+      console.log('Upload successful:', result.data);
+
+      // Refresh data
       await fetchObligationDetails();
-      alert(
-        "Evidence uploaded successfully! Obligation status updated to Completed.",
-      );
+      await fetchRegionProgress();
+      
+      toast.success(`Evidence uploaded successfully${!isAdmin && userRegion ? ` for region ${userRegion}` : ''}!`);
       setSelectedFile(null);
-      // Reset the file input using the ref
+      
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -583,6 +560,7 @@ const ObligationDetails = () => {
       setUploadError(
         error.message || "Failed to upload evidence. Please try again.",
       );
+      toast.error("Failed to upload evidence: " + error.message);
     } finally {
       setUploading(false);
     }
@@ -595,9 +573,10 @@ const ObligationDetails = () => {
       await addComment(obligation.id, comment);
       fetchObligationDetails();
       setComment("");
+      toast.success("Comment added successfully");
     } catch (error) {
       console.error("Error adding comment:", error);
-      alert("Failed to add comment. Please try again.");
+      toast.error("Failed to add comment. Please try again.");
     }
   };
 
@@ -631,22 +610,12 @@ const ObligationDetails = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  console.log("Current state:", {
-    loading,
-    error,
-    obligationId,
-    hasObligation: !!obligation,
-  });
-
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-[#8cc63e] mx-auto"></div>
           <p className="mt-4 text-gray-600">Loading obligation details...</p>
-          <p className="text-xs text-gray-400 mt-2">
-            ID: {obligationId || "No ID provided"}
-          </p>
         </div>
       </div>
     );
@@ -676,13 +645,6 @@ const ObligationDetails = () => {
         <p className="mt-2 text-sm sm:text-base text-gray-600">
           The obligation "{obligationId || "No ID"}" couldn't be loaded.
         </p>
-        <div className="mt-4 p-4 bg-gray-50 rounded-lg text-left overflow-x-auto">
-          <p className="text-xs sm:text-sm text-gray-500">Debug Info:</p>
-          <p className="text-xs text-gray-400 mt-1 break-all">
-            Obligation ID from URL: {obligationId || "Not provided"}
-          </p>
-          <p className="text-xs text-gray-400 break-all">Error: {error || "Not found"}</p>
-        </div>
         <button
           onClick={() => navigate("/compliance")}
           className="mt-4 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] text-sm sm:text-base"
@@ -705,6 +667,25 @@ const ObligationDetails = () => {
             {obligation.obligation_id}
           </h1>
           <p className="text-sm text-gray-600 break-words">{obligation.name}</p>
+          {!isAdmin && userRegion && (
+            <span className="inline-flex items-center mt-1">
+              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                Region: {userRegion}
+              </span>
+              {regionProgress && (
+                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getStatusBadge(regionProgress.status)}`}>
+                  Status: {regionProgress.status}
+                </span>
+              )}
+            </span>
+          )}
+          {isAdmin && (
+            <span className="inline-flex items-center mt-1">
+              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                Admin - All Regions
+              </span>
+            </span>
+          )}
         </div>
         <button
           onClick={() => navigate("/compliance")}
@@ -715,7 +696,6 @@ const ObligationDetails = () => {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
-        {/* Main Details */}
         <div className="lg:col-span-2 space-y-4 sm:space-y-6">
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
@@ -863,7 +843,6 @@ const ObligationDetails = () => {
             </dl>
           </div>
 
-          {/* Obligation Instances */}
           {instances.length > 0 && (
             <div className="bg-white rounded-lg shadow p-4 sm:p-6">
               <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
@@ -932,10 +911,9 @@ const ObligationDetails = () => {
             </div>
           )}
 
-          {/* Status Update */}
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-              Update Status
+              Update Status {!isAdmin && userRegion && `(Region: ${userRegion})`}
             </h3>
             <div className="flex flex-wrap gap-2">
               {[
@@ -944,24 +922,35 @@ const ObligationDetails = () => {
                 "In Progress",
                 "Completed",
                 "Overdue",
+                "Due Today",
                 "Closed",
               ].map((status) => (
                 <button
                   key={status}
                   onClick={() => handleStatusUpdate(status)}
                   className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md transition-colors text-xs sm:text-sm ${
-                    obligation.current_status === status
+                    (obligation.current_status === status) ||
+                    (regionProgress?.status === status && !isAdmin && userRegion)
                       ? `bg-${getStatusColor(status)}-600 text-white`
                       : `bg-${getStatusColor(status)}-100 text-${getStatusColor(status)}-700 hover:bg-${getStatusColor(status)}-200`
                   }`}
                 >
                   {status}
+                  {!isAdmin && userRegion && regionProgress?.status === status && (
+                    <span className="ml-1 text-[8px]">✓</span>
+                  )}
                 </button>
               ))}
             </div>
+            {!isAdmin && userRegion && regionProgress && (
+              <p className="text-xs text-gray-500 mt-2">
+                Current region status: <span className="font-medium">{regionProgress.status}</span>
+                {regionProgress.completed_at && ` • Completed: ${formatDate(regionProgress.completed_at)}`}
+                {regionProgress.started_at && ` • Started: ${formatDate(regionProgress.started_at)}`}
+              </p>
+            )}
           </div>
 
-          {/* Comments */}
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Comments & Activity
@@ -1011,9 +1000,7 @@ const ObligationDetails = () => {
           </div>
         </div>
 
-        {/* Sidebar */}
         <div className="space-y-4 sm:space-y-6">
-          {/* Evidence Upload */}
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Evidence
@@ -1100,7 +1087,6 @@ const ObligationDetails = () => {
                 )}
               </div>
 
-              {/* Evidence List */}
               {evidence.map((item) => (
                 <div key={item.id} className="bg-gray-50 p-3 rounded-lg">
                   <div className="flex flex-col sm:flex-row justify-between items-start gap-2 sm:gap-0">
@@ -1116,6 +1102,11 @@ const ObligationDetails = () => {
                       >
                         {item.status}
                       </span>
+                      {item.region_id && (
+                        <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800">
+                          Region
+                        </span>
+                      )}
                     </div>
                     {item.file_url && (
                       <a
@@ -1150,13 +1141,11 @@ const ObligationDetails = () => {
             </div>
           </div>
 
-          {/* Evidence Templates - Using bucket "template" */}
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Evidence Templates
             </h3>
             <div className="space-y-4">
-              {/* Upload Template */}
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 text-center">
                 <svg
                   className="h-8 w-8 text-gray-400 mx-auto"
@@ -1213,7 +1202,6 @@ const ObligationDetails = () => {
                 )}
               </div>
 
-              {/* Templates List */}
               {templateLoading ? (
                 <div className="text-center py-4">
                   <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[#8cc63e] mx-auto"></div>
@@ -1306,7 +1294,6 @@ const ObligationDetails = () => {
   );
 };
 
-// Helper function for status colors
 const getStatusColor = (status) => {
   const colors = {
     "Not Started": "gray",
@@ -1314,6 +1301,7 @@ const getStatusColor = (status) => {
     "In Progress": "blue",
     Completed: "green",
     Overdue: "red",
+    "Due Today": "orange",
     Closed: "gray",
   };
   return colors[status] || "gray";

@@ -7,9 +7,15 @@ import {
   getEvidence,
 } from "../../api/compliance";
 import { supabase } from "../../api/supabase";
+import { useAuth } from "../../context/AuthContext";
 import JSZip from "jszip";
 
 const Reports = () => {
+  // Removed useNavigate since it's not needed
+  const { profile } = useAuth();
+  const isAdmin = profile?.role === "admin";
+  const userRegion = profile?.region_name || null;
+
   const [reportType, setReportType] = useState("compliance-summary");
   const [loading, setLoading] = useState(true);
   const [reportData, setReportData] = useState(null);
@@ -31,8 +37,11 @@ const Reports = () => {
   // Available options for filters
   const [domains, setDomains] = useState([]);
   const [policies, setPolicies] = useState([]);
+  const [allPolicies, setAllPolicies] = useState([]);
   const [clauses, setClauses] = useState([]);
+  const [allClauses, setAllClauses] = useState([]);
   const [subRegions, setSubRegions] = useState([]);
+  const [allSubRegions, setAllSubRegions] = useState([]);
   const [months] = useState([
     { value: "01", label: "January" },
     { value: "02", label: "February" },
@@ -60,6 +69,17 @@ const Reports = () => {
     }
   }, [selectedDomain, selectedPolicy, selectedClause, selectedSubRegion, selectedMonth, selectedYear]);
 
+  // Cascading filter effect - Update policies, clauses, subRegions based on selectedDomain
+  useEffect(() => {
+    if (selectedDomain) {
+      updateFiltersBasedOnDomain(selectedDomain);
+    } else {
+      setPolicies(allPolicies);
+      setClauses(allClauses);
+      setSubRegions(allSubRegions);
+    }
+  }, [selectedDomain]);
+
   const fetchFilterOptions = async () => {
     try {
       // Fetch all obligations to get unique values
@@ -68,28 +88,26 @@ const Reports = () => {
         .select('domain, clause, policy_id, region');
 
       if (obligationsData) {
-        // Get unique domains
         const uniqueDomains = [...new Set(obligationsData.map(o => o.domain).filter(Boolean))];
         setDomains(uniqueDomains);
 
-        // Get unique clauses
         const uniqueClauses = [...new Set(obligationsData.map(o => o.clause).filter(Boolean))];
+        setAllClauses(uniqueClauses);
         setClauses(uniqueClauses);
 
-        // Get unique sub-regions
         const uniqueSubRegions = [...new Set(obligationsData.map(o => o.region).filter(Boolean))];
+        setAllSubRegions(uniqueSubRegions);
         setSubRegions(uniqueSubRegions);
 
-        // Get policies
         const { data: policiesData } = await supabase
           .from('policies')
           .select('id, name');
         if (policiesData) {
+          setAllPolicies(policiesData);
           setPolicies(policiesData);
         }
       }
 
-      // Generate years (last 5 years including current)
       const currentYear = new Date().getFullYear();
       const yearOptions = [];
       for (let i = currentYear - 4; i <= currentYear; i++) {
@@ -99,6 +117,41 @@ const Reports = () => {
 
     } catch (error) {
       console.error('Error fetching filter options:', error);
+    }
+  };
+
+  const updateFiltersBasedOnDomain = async (domain) => {
+    try {
+      const { data: domainObligations, error } = await supabase
+        .from('obligations')
+        .select('clause, policy_id, region')
+        .eq('domain', domain);
+
+      if (error) throw error;
+
+      if (domainObligations) {
+        const policyIds = [...new Set(domainObligations.map(o => o.policy_id).filter(Boolean))];
+        const filteredPolicies = allPolicies.filter(p => policyIds.includes(p.id));
+        setPolicies(filteredPolicies);
+
+        const uniqueClauses = [...new Set(domainObligations.map(o => o.clause).filter(Boolean))];
+        setClauses(uniqueClauses);
+
+        const uniqueSubRegions = [...new Set(domainObligations.map(o => o.region).filter(Boolean))];
+        setSubRegions(uniqueSubRegions);
+
+        if (selectedPolicy && !filteredPolicies.some(p => p.id === selectedPolicy)) {
+          setSelectedPolicy("");
+        }
+        if (selectedClause && !uniqueClauses.includes(selectedClause)) {
+          setSelectedClause("");
+        }
+        if (selectedSubRegion && !uniqueSubRegions.includes(selectedSubRegion)) {
+          setSelectedSubRegion("");
+        }
+      }
+    } catch (error) {
+      console.error('Error updating filters based on domain:', error);
     }
   };
 
@@ -130,53 +183,34 @@ const Reports = () => {
         };
       }
 
-      // Fetch all required data with filters
-      const [
-        obligationsData,
-        statsData,
-        domainData,
-        regionsData,
-        evidenceData,
-      ] = await Promise.all([
-        getObligations(filters),
-        getDashboardStats(),
-        getComplianceByDomain(),
-        getRegions(),
-        getEvidenceForReport(),
-      ]);
-
-      setObligations(obligationsData.data || []);
-      setStats(statsData);
-      setDomainData(domainData);
-      setRegions(regionsData.data || []);
-      setAllEvidence(evidenceData || []);
-
-      // Fetch filtered data
-      const filteredData = await fetchFilteredData(filters, dateFilter);
-
-      // Generate report based on type with filtered data
-      generateReport(
-        reportType,
-        filteredData,
-        statsData,
-        domainData,
-        regionsData.data,
-        evidenceData,
-      );
-    } catch (error) {
-      console.error("Error fetching report data:", error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const getEvidenceForReport = async () => {
-    try {
-      // Fetch all evidence with obligation details
-      const { data, error } = await supabase
+      // First, get obligations that match ALL filters
+      let obligationQuery = supabase.from("obligations").select("id, domain, region, policy_id, clause");
+      
+      if (filters.domain) {
+        obligationQuery = obligationQuery.eq('domain', filters.domain);
+      }
+      if (filters.region) {
+        obligationQuery = obligationQuery.eq('region', filters.region);
+      }
+      if (filters.policy_id) {
+        obligationQuery = obligationQuery.eq('policy_id', filters.policy_id);
+      }
+      if (filters.clause) {
+        obligationQuery = obligationQuery.eq('clause', filters.clause);
+      }
+      
+      const { data: filteredObligations, error: obligationError } = await obligationQuery;
+      
+      if (obligationError) {
+        console.error("Error fetching filtered obligations:", obligationError);
+      }
+      
+      const obligationIds = filteredObligations?.map(o => o.id) || [];
+      
+      // Fetch evidence only for the filtered obligations AND region
+      let evidenceQuery = supabase
         .from("evidence")
-        .select(
-          `
+        .select(`
           *,
           obligation:obligations(
             obligation_id,
@@ -185,17 +219,94 @@ const Reports = () => {
             current_status,
             evidence_type,
             responsible,
-            accountable
+            accountable,
+            region,
+            policy_id,
+            clause,
+            created_at
           )
-        `,
-        )
+        `)
         .order("uploaded_at", { ascending: false });
+      
+      // Apply region filter for non-admin users
+      if (!isAdmin && userRegion) {
+        // Get region ID for the user's region
+        const { data: regionData } = await supabase
+          .from('regions')
+          .select('id')
+          .eq('name', userRegion)
+          .single();
+        
+        if (regionData) {
+          evidenceQuery = evidenceQuery.eq('region_id', regionData.id);
+        }
+      }
+      
+      // Apply obligation ID filter if we have filtered obligations
+      if (obligationIds.length > 0) {
+        evidenceQuery = evidenceQuery.in('obligation_id', obligationIds);
+      } else if (filters.domain || filters.region || filters.policy_id || filters.clause) {
+        setAllEvidence([]);
+        const filteredData = await fetchFilteredData(filters, dateFilter);
+        const regionsData = await getRegions();
+        generateReport(
+          reportType,
+          filteredData,
+          stats,
+          domainData,
+          regionsData?.data || [],
+          [],
+        );
+        setLoading(false);
+        return;
+      }
+      
+      // Apply date filters on evidence uploaded_at
+      if (dateFilter.startDate && dateFilter.endDate) {
+        evidenceQuery = evidenceQuery
+          .gte("uploaded_at", dateFilter.startDate)
+          .lte("uploaded_at", dateFilter.endDate);
+      }
 
-      if (error) throw error;
-      return data || [];
+      const { data: evidenceData, error: evidenceError } = await evidenceQuery;
+      
+      if (evidenceError) {
+        console.error("Error fetching evidence:", evidenceError);
+      }
+
+      // Fetch all required data with filters and region
+      const [
+        obligationsData,
+        statsData,
+        domainData,
+        regionsData,
+      ] = await Promise.all([
+        getObligations(filters, userRegion, isAdmin),
+        getDashboardStats(userRegion, isAdmin),
+        getComplianceByDomain(userRegion, isAdmin),
+        getRegions(),
+      ]);
+
+      setObligations(obligationsData.data || []);
+      setStats(statsData);
+      setDomainData(domainData);
+      setRegions(regionsData.data || []);
+      setAllEvidence(evidenceData || []);
+
+      const filteredData = await fetchFilteredData(filters, dateFilter);
+
+      generateReport(
+        reportType,
+        filteredData,
+        statsData,
+        domainData,
+        regionsData.data,
+        evidenceData || [],
+      );
     } catch (error) {
-      console.error("Error fetching evidence:", error);
-      return [];
+      console.error("Error fetching report data:", error);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -206,7 +317,6 @@ const Reports = () => {
           policy:policies(*)
         `);
 
-      // Apply filters
       if (filters.domain) {
         query = query.eq('domain', filters.domain);
       }
@@ -220,7 +330,6 @@ const Reports = () => {
         query = query.eq('region', filters.region);
       }
 
-      // Apply date filters (created_at)
       if (dateFilter.startDate && dateFilter.endDate) {
         query = query
           .gte("created_at", dateFilter.startDate)
@@ -306,6 +415,7 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
@@ -327,6 +437,7 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
@@ -348,6 +459,7 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
@@ -391,6 +503,7 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
@@ -429,16 +542,15 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
 
   const generateEvidenceReport = (obligations, evidence) => {
-    // Get obligations that have evidence uploaded
     const obligationsWithEvidence = new Set();
     const evidenceData = [];
 
-    // Group evidence by obligation
     evidence.forEach((item) => {
       if (item.obligation_id) {
         obligationsWithEvidence.add(item.obligation_id);
@@ -454,11 +566,11 @@ const Reports = () => {
           status: item.status,
           domain: item.obligation?.domain || "",
           evidence_type: item.obligation?.evidence_type || "",
+          region: item.obligation?.region || "",
         });
       }
     });
 
-    // Get obligations that require evidence but have none uploaded
     const obligationsWithEvidenceRequired = obligations
       .filter((o) => o.evidence_required && !obligationsWithEvidence.has(o.id))
       .map((o) => ({
@@ -486,10 +598,12 @@ const Reports = () => {
         subRegion: selectedSubRegion,
         month: selectedMonth,
         year: selectedYear,
+        region: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
 
+  // FIXED: Download only region-specific evidence
   const downloadAllDocuments = async () => {
     if (!allEvidence || allEvidence.length === 0) {
       alert("No documents found to download.");
@@ -504,24 +618,70 @@ const Reports = () => {
       let downloadedCount = 0;
       const totalFiles = allEvidence.length;
 
+      const monthLabel = selectedMonth ? months.find(m => m.value === selectedMonth)?.label : '';
+      const yearLabel = selectedYear || '';
+
+      // Filter evidence by region for non-admin users
+      let evidenceToDownload = allEvidence;
+      if (!isAdmin && userRegion) {
+        // Get region ID
+        const { data: regionData } = await supabase
+          .from('regions')
+          .select('id')
+          .eq('name', userRegion)
+          .single();
+        
+        if (regionData) {
+          evidenceToDownload = allEvidence.filter(item => item.region_id === regionData.id);
+        } else {
+          alert("Your region could not be identified. Please contact administrator.");
+          setDownloading(false);
+          return;
+        }
+      }
+
+      if (evidenceToDownload.length === 0) {
+        alert(`No documents found for ${!isAdmin ? `region ${userRegion}` : 'the selected filters'}.`);
+        setDownloading(false);
+        return;
+      }
+
       // Process each evidence file
-      for (const evidence of allEvidence) {
+      for (const evidence of evidenceToDownload) {
         if (!evidence.file_url) continue;
 
         try {
-          // Fetch the file from Supabase storage
           const response = await fetch(evidence.file_url);
           if (!response.ok)
             throw new Error(`Failed to download: ${evidence.file_name}`);
 
           const blob = await response.blob();
 
-          // Create a clean filename
+          const obligation = evidence.obligation || {};
+          const obligationId = obligation.obligation_id || "unknown";
+          const domain = obligation.domain || "unknown";
+          const region = obligation.region || userRegion || "unknown";
+          
           const fileExtension = evidence.file_name.split(".").pop() || "";
-          const cleanFileName = `${evidence.obligation?.obligation_id || "unknown"}_${evidence.file_name}`;
+          
+          let fileName = `${obligationId}_${domain}`;
+          
+          // Add region to filename
+          if (region) {
+            fileName += `_${region.replace(/\s/g, '')}`;
+          }
+          
+          if (monthLabel && yearLabel) {
+            fileName += `_${monthLabel}_${yearLabel}`;
+          } else if (yearLabel) {
+            fileName += `_${yearLabel}`;
+          }
+          
+          fileName += `.${fileExtension}`;
+          
+          fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-          // Add file to zip
-          documentsFolder.file(cleanFileName, blob);
+          documentsFolder.file(fileName, blob);
           downloadedCount++;
         } catch (error) {
           console.error(`Error downloading ${evidence.file_name}:`, error);
@@ -534,21 +694,36 @@ const Reports = () => {
         return;
       }
 
-      // Generate the ZIP file
       const zipBlob = await zip.generateAsync({ type: "blob" });
 
-      // Create download link
+      let zipFileName = `compliance_documents`;
+      if (!isAdmin && userRegion) {
+        zipFileName += `_${userRegion.replace(/\s/g, '')}`;
+      }
+      if (selectedDomain) zipFileName += `_${selectedDomain}`;
+      if (selectedSubRegion) zipFileName += `_${selectedSubRegion}`;
+      if (selectedPolicy) {
+        const policyName = policies.find(p => p.id === selectedPolicy)?.name || selectedPolicy;
+        zipFileName += `_${policyName}`;
+      }
+      if (selectedClause) zipFileName += `_clause_${selectedClause}`;
+      if (monthLabel && yearLabel) zipFileName += `_${monthLabel}_${yearLabel}`;
+      if (yearLabel && !monthLabel) zipFileName += `_${yearLabel}`;
+      zipFileName += `_${new Date().toISOString().split("T")[0]}.zip`;
+      
+      zipFileName = zipFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+
       const url = window.URL.createObjectURL(zipBlob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `compliance_documents_${new Date().toISOString().split("T")[0]}.zip`;
+      link.download = zipFileName;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
 
       alert(
-        `Successfully downloaded ${downloadedCount} of ${totalFiles} documents.`,
+        `Successfully downloaded ${downloadedCount} of ${totalFiles} documents ${!isAdmin ? `for region ${userRegion}` : ''}.`,
       );
     } catch (error) {
       console.error("Error downloading documents:", error);
@@ -585,6 +760,9 @@ const Reports = () => {
     setSelectedSubRegion("");
     setSelectedMonth("");
     setSelectedYear("");
+    setPolicies(allPolicies);
+    setClauses(allClauses);
+    setSubRegions(allSubRegions);
   };
 
   if (loading) {
@@ -601,7 +779,19 @@ const Reports = () => {
   return (
     <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0">
-        <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Reports</h1>
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Reports</h1>
+          {!isAdmin && userRegion && (
+            <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full mt-1 inline-block">
+              Region: {userRegion}
+            </span>
+          )}
+          {isAdmin && (
+            <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full mt-1 inline-block">
+              Admin - All Regions
+            </span>
+          )}
+        </div>
         <div className="flex flex-wrap gap-2">
           <button
             onClick={clearFilters}
@@ -775,7 +965,7 @@ const Reports = () => {
                 </div>
               </div>
 
-              {/* Download Button */}
+              {/* Download Button - Region filtered */}
               <div className="pt-4 border-t border-gray-200">
                 <button
                   onClick={downloadAllDocuments}
@@ -825,9 +1015,19 @@ const Reports = () => {
                     </>
                   )}
                 </button>
+                {!isAdmin && userRegion && (
+                  <p className="text-[9px] sm:text-[10px] text-green-600 text-center mt-1.5">
+                    ✓ Only documents from {userRegion} will be downloaded
+                  </p>
+                )}
                 {allEvidence.length === 0 && !downloading && (
                   <p className="text-[10px] sm:text-xs text-gray-500 text-center mt-2">
                     No documents available to download
+                  </p>
+                )}
+                {allEvidence.length > 0 && (
+                  <p className="text-[9px] sm:text-[10px] text-gray-400 text-center mt-1.5">
+                    Files will be named: obligation_id_domain_region_monthyear
                   </p>
                 )}
               </div>
@@ -844,7 +1044,8 @@ const Reports = () => {
               </h3>
               {reportData?.filters && (
                 <span className="text-[10px] sm:text-xs text-gray-500">
-                  {reportData.filters.domain && `Domain: ${reportData.filters.domain} `}
+                  {reportData.filters.region && `Region: ${reportData.filters.region} `}
+                  {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                   {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                   {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
                   {reportData.filters.month && reportData.filters.year && 
@@ -1138,7 +1339,7 @@ const Reports = () => {
                   {reportData.evidenceFiles?.length > 0 && (
                     <div>
                       <h4 className="text-[10px] sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
-                        Uploaded Evidence Files
+                        Uploaded Evidence Files {!isAdmin && userRegion && `(${userRegion})`}
                       </h4>
                       <div className="overflow-x-auto max-h-60 overflow-y-auto">
                         <table className="min-w-full divide-y divide-gray-200">
@@ -1151,7 +1352,7 @@ const Reports = () => {
                                 File Name
                               </th>
                               <th className="hidden md:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Type
+                                Region
                               </th>
                               <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
                                 Status
@@ -1170,7 +1371,7 @@ const Reports = () => {
                                     {item.file_name}
                                   </td>
                                   <td className="hidden md:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                                    {item.file_type || "N/A"}
+                                    {item.region || "N/A"}
                                   </td>
                                   <td className="px-2 sm:px-4 py-2">
                                     <span
@@ -1258,7 +1459,8 @@ const Reports = () => {
                 </p>
                 {reportData?.filters && (
                   <p className="text-[8px] sm:text-xs mt-0.5 sm:mt-1">
-                    {reportData.filters.domain && `Domain: ${reportData.filters.domain} `}
+                    {reportData.filters.region && `Region: ${reportData.filters.region} `}
+                    {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                     {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                     {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
                     {reportData.filters.subRegion && `• Sub Region: ${reportData.filters.subRegion} `}

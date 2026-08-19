@@ -1,30 +1,46 @@
-// ============================================================
-// ComplianceChart.jsx - Updated with table design matching image
-// ============================================================
+import { useState, useEffect } from "react";
+import { getComplianceByDomain } from "../../api/compliance";
 
-const ComplianceChart = ({ data }) => {
+const ComplianceChart = ({ userRegion, isAdmin }) => {
+  const [loading, setLoading] = useState(true);
+  const [chartData, setChartData] = useState({ domains: [], compliance: [] });
+
+  useEffect(() => {
+    fetchChartData();
+  }, [userRegion, isAdmin]);
+
+  const fetchChartData = async () => {
+    setLoading(true);
+    try {
+      const data = await getComplianceByDomain(userRegion, isAdmin);
+      setChartData(data);
+    } catch (error) {
+      console.error('Error fetching chart data:', error);
+      setChartData({ domains: [], compliance: [] });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Consolidate domains
   const consolidateDomains = (domains, compliance) => {
     const domainMap = {};
     
-    // Define domain consolidation rules
     const consolidationRules = {
       'Power': ['Power', 'CP Billing', 'Battery'],
       'Inventory': ['Inventory', 'Asset'],
       'Security': ['Security', 'Maintenance']
     };
 
-    // First, map each domain to its consolidated group
     const getConsolidatedKey = (domain) => {
       for (const [key, values] of Object.entries(consolidationRules)) {
         if (values.includes(domain)) {
           return key;
         }
       }
-      return domain; // Keep original if no consolidation rule matches
+      return domain;
     };
 
-    // Calculate weighted averages for each consolidated domain
     for (let i = 0; i < domains.length; i++) {
       const domain = domains[i];
       const value = compliance[i] || 0;
@@ -43,13 +59,11 @@ const ComplianceChart = ({ data }) => {
       domainMap[consolidatedKey].domains.push(domain);
     }
 
-    // Calculate averages
     const consolidatedDomains = [];
     const consolidatedCompliance = [];
 
     for (const [key, value] of Object.entries(domainMap)) {
       consolidatedDomains.push(key);
-      // Calculate weighted average
       const average = Math.round(value.totalValue / value.count);
       consolidatedCompliance.push(average);
     }
@@ -57,12 +71,31 @@ const ComplianceChart = ({ data }) => {
     return { domains: consolidatedDomains, compliance: consolidatedCompliance };
   };
 
-  // Consolidate the data
-  const consolidatedData = data && data.domains && data.compliance 
-    ? consolidateDomains(data.domains, data.compliance)
+  const consolidatedData = chartData.domains && chartData.compliance 
+    ? consolidateDomains(chartData.domains, chartData.compliance)
     : { domains: [], compliance: [] };
 
-  // If no data, show fallback
+  if (loading) {
+    return (
+      <div className="bg-white rounded-lg shadow p-4 sm:p-5 md:p-6">
+        <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900 mb-4">
+          Compliance by Domain
+        </h3>
+        <div className="space-y-3">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="animate-pulse">
+              <div className="flex justify-between mb-1">
+                <div className="h-4 bg-gray-200 rounded w-24"></div>
+                <div className="h-4 bg-gray-200 rounded w-12"></div>
+              </div>
+              <div className="h-2 bg-gray-200 rounded"></div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (consolidatedData.domains.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow p-4 sm:p-5 md:p-6">
