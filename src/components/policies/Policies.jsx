@@ -312,7 +312,7 @@ const Policies = () => {
               setUploadError("");
               setUploadSuccess("");
             }}
-            className="bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center"
+            className="bg-[#ff0099] text-white px-4 py-2 rounded-md hover:bg-[#e40076] transition-colors flex items-center"
           >
             <svg
               className="h-5 w-5 mr-2"

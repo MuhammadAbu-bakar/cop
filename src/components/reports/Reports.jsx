@@ -970,7 +970,7 @@ const Reports = () => {
                 <button
                   onClick={downloadAllDocuments}
                   disabled={downloading || allEvidence.length === 0}
-                  className="w-full bg-[#8cc63e] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
+                  className="w-full bg-[#ff0099] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
                 >
                   {downloading ? (
                     <>

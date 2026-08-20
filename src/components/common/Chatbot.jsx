@@ -655,7 +655,7 @@ ${error?.message || "Unknown error"}`,
           ${
             isOpen
               ? "bg-red-500 hover:bg-red-600 rotate-90"
-              : "bg-[#8cc63e] hover:bg-[#7ab52e]"
+              : "bg-[#ff0099] hover:bg-[#cc0068]"
           }
           text-white
         `}
@@ -743,7 +743,7 @@ ${error?.message || "Unknown error"}`,
               justify-between
               flex-shrink-0
             "
-            style={{ backgroundColor: "#8cc63e" }}
+            style={{ backgroundColor: "#ff0099" }}
           >
 
             <div
@@ -896,16 +896,16 @@ ${error?.message || "Unknown error"}`,
                   className="
                     text-[11px]
                     whitespace-nowrap
-                    bg-green-50
-                    text-[#8cc63e]
+                    bg-pink-50
+                    text-[#ff0099]
                     px-3
                     py-1.5
                     rounded-full
                     border
-                    border-[#8cc63e]/20
-                    hover:bg-[#8cc63e]
+                    border-[#ff0099]/20
+                    hover:bg-[#ff0099]
                     hover:text-white
-                    hover:border-[#8cc63e]
+                    hover:border-[#ff0099]
                     transition-all
                     flex-shrink-0
                   "
@@ -978,7 +978,7 @@ ${error?.message || "Unknown error"}`,
                     `}
                     style={
                       message.sender === "user"
-                        ? { backgroundColor: "#8cc63e" }
+                        ? { backgroundColor: "#ff0099" }
                         : {}
                     }
                   >
@@ -1159,7 +1159,7 @@ ${error?.message || "Unknown error"}`,
                         animate-bounce
                       "
                       style={{ 
-                        backgroundColor: "#8cc63e",
+                        backgroundColor: "#ff0099",
                         animationDelay: "0ms"
                       }}
                     />
@@ -1172,7 +1172,7 @@ ${error?.message || "Unknown error"}`,
                         animate-bounce
                       "
                       style={{
-                        backgroundColor: "#8cc63e",
+                        backgroundColor: "#ff0099",
                         animationDelay:
                           "150ms",
                       }}
@@ -1186,7 +1186,7 @@ ${error?.message || "Unknown error"}`,
                         animate-bounce
                       "
                       style={{
-                        backgroundColor: "#8cc63e",
+                        backgroundColor: "#ff0099",
                         animationDelay:
                           "300ms",
                       }}
@@ -1266,7 +1266,7 @@ ${error?.message || "Unknown error"}`,
                   text-sm
                   focus:outline-none
                   focus:ring-2
-                  focus:ring-[#8cc63e]
+                  focus:ring-[#ff0099]
                   focus:border-transparent
                 "
 
@@ -1304,13 +1304,13 @@ ${error?.message || "Unknown error"}`,
                   justify-center
                 "
                 style={{ 
-                  backgroundColor: "#8cc63e"
+                  backgroundColor: "#ff0099"
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = "#7ab52e";
+                  e.currentTarget.style.backgroundColor = "#cc0068";
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = "#8cc63e";
+                  e.currentTarget.style.backgroundColor = "#ff0099";
                 }}
               >
 

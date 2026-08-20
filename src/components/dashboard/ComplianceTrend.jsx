@@ -132,7 +132,7 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
       return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
           <p className="text-sm font-medium text-gray-900">{label}</p>
-          <p className="text-sm font-bold" style={{ color: '#8cc63e' }}>
+          <p className="text-sm font-bold" style={{ color: '#ff0099' }}>
             {payload[0].value}%
           </p>
         </div>
@@ -158,7 +158,7 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
           <p className="text-xs text-gray-500 mt-0.5">Last 6 Months</p>
         </div>
         <div className="text-right">
-          <span className="text-lg sm:text-xl md:text-2xl font-bold" style={{ color: '#8cc63e' }}>
+          <span className="text-lg sm:text-xl md:text-2xl font-bold" style={{ color: '#ff0099' }}>
             {data[data.length - 1]?.value || 0}%
           </span>
           <p className="text-[10px] text-gray-500">Current</p>
@@ -174,8 +174,8 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
           >
             <defs>
               <linearGradient id="colorGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#8cc63e" stopOpacity={0.3}/>
-                <stop offset="95%" stopColor="#8cc63e" stopOpacity={0}/>
+                <stop offset="5%" stopColor="#ff0099" stopOpacity={0.3}/>
+                <stop offset="95%" stopColor="#ff0099" stopOpacity={0}/>
               </linearGradient>
             </defs>
             
@@ -217,16 +217,16 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
             <Line
               type="monotone"
               dataKey="value"
-              stroke="#8cc63e"
+              stroke="#ff0099"
               strokeWidth={2.5}
               dot={{
-                fill: '#8cc63e',
+                fill: '#ff0099',
                 stroke: '#fff',
                 strokeWidth: 2,
                 r: 4
               }}
               activeDot={{
-                fill: '#8cc63e',
+                fill: '#ff0099',
                 stroke: '#fff',
                 strokeWidth: 2,
                 r: 6
@@ -246,7 +246,7 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
           <p className="text-[10px] text-gray-500">Change</p>
           <p className={`text-sm font-semibold ${
             (data[data.length - 1]?.value || 0) > (data[0]?.value || 0) 
-              ? 'text-[#8cc63e]' 
+              ? 'text-[#ff0099]' 
               : 'text-red-600'
           }`}>
             {((data[data.length - 1]?.value || 0) - (data[0]?.value || 0)) > 0 ? '+' : ''}

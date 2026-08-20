@@ -21,6 +21,8 @@ const ComplianceRegister = () => {
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterFrequency, setFilterFrequency] = useState("all");
   const [filterDomain, setFilterDomain] = useState("all");
+  const [filterMonth, setFilterMonth] = useState("");
+  const [filterYear, setFilterYear] = useState("");
   const [hoveredObligation, setHoveredObligation] = useState(null);
   const [activeTab, setActiveTab] = useState("Cyclic");
 
@@ -105,13 +107,46 @@ const ComplianceRegister = () => {
   // Store event obligations data for autofill
   const [eventObligationsData, setEventObligationsData] = useState([]);
 
+  // Month and Year options
+  const months = [
+    { value: "01", label: "January" },
+    { value: "02", label: "February" },
+    { value: "03", label: "March" },
+    { value: "04", label: "April" },
+    { value: "05", label: "May" },
+    { value: "06", label: "June" },
+    { value: "07", label: "July" },
+    { value: "08", label: "August" },
+    { value: "09", label: "September" },
+    { value: "10", label: "October" },
+    { value: "11", label: "November" },
+    { value: "12", label: "December" },
+  ];
+
+  const getYears = () => {
+    const currentYear = new Date().getFullYear();
+    const years = [];
+    for (let i = currentYear - 5; i <= currentYear + 1; i++) {
+      years.push(i.toString());
+    }
+    return years;
+  };
+
   // Parse URL parameters on mount and when location changes
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const statusParam = params.get('status');
+    const monthParam = params.get('month');
+    const yearParam = params.get('year');
     
     if (statusParam) {
       setFilterStatus(statusParam);
+    }
+    if (monthParam) {
+      setFilterMonth(monthParam);
+    }
+    if (yearParam) {
+      setFilterYear(yearParam);
     }
   }, [location.search]);
 
@@ -871,6 +906,8 @@ const ComplianceRegister = () => {
     setFilterStatus("all");
     setFilterFrequency("all");
     setFilterDomain("all");
+    setFilterMonth("");
+    setFilterYear("");
     setSortField(null);
     setSortDirection('asc');
     navigate('/compliance', { replace: true });
@@ -937,7 +974,24 @@ const ComplianceRegister = () => {
       const matchesDomain =
         filterDomain === "all" || obligation.domain === filterDomain;
 
-      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
+      // Month/Year filter on calculated_due_date
+      let matchesMonth = true;
+      if (filterMonth && filterYear && obligation.calculated_due_date) {
+        const dueDate = new Date(obligation.calculated_due_date);
+        const dueMonth = String(dueDate.getMonth() + 1).padStart(2, "0");
+        const dueYear = dueDate.getFullYear().toString();
+        matchesMonth = dueMonth === filterMonth && dueYear === filterYear;
+      } else if (filterMonth && obligation.calculated_due_date) {
+        const dueDate = new Date(obligation.calculated_due_date);
+        const dueMonth = String(dueDate.getMonth() + 1).padStart(2, "0");
+        matchesMonth = dueMonth === filterMonth;
+      } else if (filterYear && obligation.calculated_due_date) {
+        const dueDate = new Date(obligation.calculated_due_date);
+        const dueYear = dueDate.getFullYear().toString();
+        matchesMonth = dueYear === filterYear;
+      }
+
+      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain && matchesMonth;
     });
 
     // Apply sorting
@@ -984,6 +1038,20 @@ const ComplianceRegister = () => {
     return obligations.filter(o => o.obligation_type === "Event").length;
   };
 
+  const updateUrlParams = () => {
+    const params = new URLSearchParams();
+    if (filterStatus && filterStatus !== 'all') {
+      params.set('status', filterStatus);
+    }
+    if (filterMonth) {
+      params.set('month', filterMonth);
+    }
+    if (filterYear) {
+      params.set('year', filterYear);
+    }
+    navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -1025,6 +1093,23 @@ const ComplianceRegister = () => {
                 </span>
                 <button
                   onClick={clearFilters}
+                  className="ml-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+            {(filterMonth || filterYear) && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
+                  {filterMonth && months.find(m => m.value === filterMonth)?.label} {filterYear}
+                </span>
+                <button
+                  onClick={() => {
+                    setFilterMonth("");
+                    setFilterYear("");
+                    updateUrlParams();
+                  }}
                   className="ml-1 text-xs text-gray-500 hover:text-gray-700"
                 >
                   ✕
@@ -1075,7 +1160,7 @@ const ComplianceRegister = () => {
           {canAddEvent && (
             <button
               onClick={() => handleAddClick("Event")}
-              className="bg-orange-500 text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-orange-600 transition-colors flex items-center text-xs sm:text-sm"
+              className="bg-[#ff0099] text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-[#e40076] transition-colors flex items-center text-xs sm:text-sm"
             >
               <svg
                 className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1"
@@ -1132,7 +1217,7 @@ const ComplianceRegister = () => {
       {/* Filters - Only show for Cyclic tab */}
       {activeTab === "Cyclic" && (
         <div className="bg-white rounded-lg shadow p-3">
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             <div>
               <input
                 type="text"
@@ -1147,13 +1232,7 @@ const ComplianceRegister = () => {
                 value={filterStatus}
                 onChange={(e) => {
                   setFilterStatus(e.target.value);
-                  const params = new URLSearchParams(location.search);
-                  if (e.target.value === "all") {
-                    params.delete('status');
-                  } else {
-                    params.set('status', e.target.value);
-                  }
-                  navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+                  updateUrlParams();
                 }}
                 className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
               >
@@ -1188,6 +1267,40 @@ const ComplianceRegister = () => {
                 {getDomains().map((domain) => (
                   <option key={domain} value={domain}>
                     {domain === "all" ? "All Domains" : domain}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <select
+                value={filterMonth}
+                onChange={(e) => {
+                  setFilterMonth(e.target.value);
+                  updateUrlParams();
+                }}
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                <option value="">All Months</option>
+                {months.map((month) => (
+                  <option key={month.value} value={month.value}>
+                    {month.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <select
+                value={filterYear}
+                onChange={(e) => {
+                  setFilterYear(e.target.value);
+                  updateUrlParams();
+                }}
+                className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                <option value="">All Years</option>
+                {getYears().map((year) => (
+                  <option key={year} value={year}>
+                    {year}
                   </option>
                 ))}
               </select>
@@ -1843,7 +1956,7 @@ const ComplianceRegister = () => {
                 <button
                   type="submit"
                   disabled={addLoading}
-                  className="w-full xs:flex-1 bg-[#8cc63e] text-white py-2 rounded-md hover:bg-[#7ab83a] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
+                  className="w-full xs:flex-1 bg-[#ff0099] text-white py-2 rounded-md hover:bg-[#e40076] transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base"
                 >
                   {addLoading ? (
                     <>

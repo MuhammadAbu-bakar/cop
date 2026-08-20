@@ -116,7 +116,7 @@ const Header = () => {
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
             className="flex items-center space-x-1 sm:space-x-2 focus:outline-none hover:bg-white/10 rounded-lg px-1 sm:px-2 py-1 transition-colors"
           >
-            <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-full bg-gradient-to-br from-green-400 to-emerald-500 flex items-center justify-center text-white font-medium text-xs shadow-md">
+            <div className="h-6 w-6 sm:h-7 sm:w-7 rounded-full bg-[#ff0099] flex items-center justify-center text-white font-medium text-xs shadow-md">
               {getDisplayName().charAt(0).toUpperCase()}
             </div>
             <div className="hidden xs:block text-left">

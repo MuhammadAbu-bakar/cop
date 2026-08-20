@@ -139,12 +139,12 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
       {/* Desktop Table View */}
       <div className="hidden sm:block overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
-          <thead className="bg-[#b6d981]">
+          <thead className="bg-[#ff0099]">
             <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">
                 Domain
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="px-3 py-2 text-left text-xs font-medium text-white uppercase tracking-wider">
                 Compliance Score
               </th>
             </tr>

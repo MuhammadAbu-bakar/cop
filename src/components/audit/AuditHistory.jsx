@@ -438,7 +438,7 @@ const AuditHistory = () => {
         {isAdmin && (
           <button
             onClick={() => setShowUploadModal(true)}
-            className="w-full sm:w-auto bg-[#8cc63e] text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center text-sm"
+            className="w-full sm:w-auto bg-[#ff0099] text-white px-3 sm:px-4 py-1.5 sm:py-2 rounded-md hover:bg-[#e40076] transition-colors flex items-center justify-center text-sm"
           >
             <svg className="h-4 w-4 sm:h-5 sm:w-5 mr-1.5 sm:mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />

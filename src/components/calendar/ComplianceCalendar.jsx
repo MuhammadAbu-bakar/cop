@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { getObligations } from "../../api/compliance";
+import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
 
 const ComplianceCalendar = () => {
@@ -11,50 +11,110 @@ const ComplianceCalendar = () => {
   
   const [view, setView] = useState("month");
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [obligations, setObligations] = useState([]);
+  const [occurrences, setOccurrences] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedDate, setSelectedDate] = useState(null);
-  const [selectedObligations, setSelectedObligations] = useState([]);
+  const [selectedOccurrences, setSelectedOccurrences] = useState([]);
 
-  // Fetch obligations with region filtering
+  // Get region ID from region name
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  // Fetch occurrences with region filtering
   useEffect(() => {
     fetchCalendarData();
-  }, []);
+  }, [currentDate, view, userRegion, isAdmin]);
 
   const fetchCalendarData = async () => {
     setLoading(true);
     try {
-      // Fetch all obligations with region filtering
-      // Status comes from obligation_progress via getObligations
-      const { data: obligationsData, error } = await getObligations(
-        {}, // filters
-        userRegion, // user's region
-        isAdmin // is admin
-      );
+      let regionId = null;
+      if (!isAdmin && userRegion) {
+        regionId = await getRegionId(userRegion);
+      }
+
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      const quarter = Math.floor(month / 3);
       
+      let startDate, endDate;
+      
+      if (view === "month") {
+        startDate = new Date(year, month, 1).toISOString().split('T')[0];
+        endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+      } else if (view === "quarter") {
+        const startMonth = quarter * 3;
+        startDate = new Date(year, startMonth, 1).toISOString().split('T')[0];
+        endDate = new Date(year, startMonth + 3, 0).toISOString().split('T')[0];
+      } else { // year view
+        startDate = new Date(year, 0, 1).toISOString().split('T')[0];
+        endDate = new Date(year, 11, 31).toISOString().split('T')[0];
+      }
+
+      // Build query for occurrences
+      let query = supabase
+        .from('obligation_occurrences')
+        .select(`
+          *,
+          obligation:obligations(
+            obligation_id,
+            name,
+            domain,
+            frequency,
+            description,
+            responsible,
+            accountable,
+            compliance_weight,
+            evidence_required,
+            evidence_type,
+            mandatory,
+            region,
+            clause,
+            due_date_rule
+          )
+        `)
+        .gte('instance_date', startDate)
+        .lte('instance_date', endDate)
+        .order('due_date', { ascending: true });
+
+      // Filter by region for non-admin users
+      if (!isAdmin && regionId) {
+        query = query.eq('region_id', regionId);
+      }
+
+      const { data, error } = await query;
       if (error) throw error;
-      
-      // Filter obligations that have a calculated_due_date
-      const obligationsWithDueDate = (obligationsData || []).filter(
-        (o) => o.calculated_due_date
-      );
-      
-      // Calculate overdue status for each obligation
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      
-      const obligationsWithOverdue = obligationsWithDueDate.map((obligation) => {
-        const dueDate = new Date(obligation.calculated_due_date);
+
+      // Process occurrences
+      const processedData = (data || []).map(occurrence => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const dueDate = new Date(occurrence.due_date);
         dueDate.setHours(0, 0, 0, 0);
-        // Status is from obligation_progress (merged via getObligations)
-        const isOverdue = dueDate < today && obligation.current_status !== "Completed";
+        const isOverdue = dueDate < today && occurrence.status !== "Completed";
+        
         return {
-          ...obligation,
-          isOverdue
+          ...occurrence,
+          isOverdue,
+          displayStatus: occurrence.status
         };
       });
-      
-      setObligations(obligationsWithOverdue);
+
+      setOccurrences(processedData);
     } catch (error) {
       console.error("Error fetching calendar data:", error);
     } finally {
@@ -62,29 +122,13 @@ const ComplianceCalendar = () => {
     }
   };
 
-  // Get obligations for the current month
-  const getCurrentMonthObligations = () => {
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    
-    return obligations.filter((obligation) => {
-      if (!obligation.calculated_due_date) return false;
-      const dueDate = new Date(obligation.calculated_due_date);
-      return dueDate.getFullYear() === year && dueDate.getMonth() === month;
-    });
-  };
-
-  // Calculate stats for the current month from obligation_progress
-  const getMonthStats = () => {
-    const monthObligations = getCurrentMonthObligations();
-    const total = monthObligations.length;
-    
-    // Status comes from obligation_progress via getObligations
-    // Only three statuses are possible: 'Completed', 'In Progress', 'Overdue'
-    const completed = monthObligations.filter(o => o.current_status === "Completed").length;
-    const overdue = monthObligations.filter(o => o.isOverdue || o.current_status === "Overdue").length;
-    const inProgress = monthObligations.filter(o => 
-      o.current_status === "In Progress" && !o.isOverdue
+  // Calculate stats for the current view
+  const getViewStats = () => {
+    const total = occurrences.length;
+    const completed = occurrences.filter(o => o.status === "Completed").length;
+    const overdue = occurrences.filter(o => o.isOverdue || o.status === "Overdue").length;
+    const inProgress = occurrences.filter(o => 
+      o.status === "In Progress" && !o.isOverdue
     ).length;
     
     return { total, completed, overdue, inProgress };
@@ -104,8 +148,7 @@ const ComplianceCalendar = () => {
   };
 
   const getStatusBadge = (status, isOverdue) => {
-    // If overdue, always show as Overdue
-    if (isOverdue) {
+    if (isOverdue || status === "Overdue") {
       return "bg-red-100 text-red-800";
     }
     
@@ -113,7 +156,7 @@ const ComplianceCalendar = () => {
       Completed: "bg-green-100 text-green-800",
       "In Progress": "bg-blue-100 text-blue-800",
       Pending: "bg-yellow-100 text-yellow-800",
-      Overdue: "bg-red-100 text-red-800",
+      "Due Today": "bg-orange-100 text-orange-800",
       "Not Started": "bg-gray-100 text-gray-800",
       Approved: "bg-purple-100 text-purple-800",
       Submitted: "bg-indigo-100 text-indigo-800",
@@ -141,23 +184,27 @@ const ComplianceCalendar = () => {
     return { daysInMonth, firstDayOfMonth };
   };
 
-  const navigateMonth = (direction) => {
+  const navigatePeriod = (direction) => {
     const newDate = new Date(currentDate);
-    newDate.setMonth(newDate.getMonth() + direction);
+    if (view === "month") {
+      newDate.setMonth(newDate.getMonth() + direction);
+    } else if (view === "quarter") {
+      newDate.setMonth(newDate.getMonth() + (direction * 3));
+    } else if (view === "year") {
+      newDate.setFullYear(newDate.getFullYear() + direction);
+    }
     setCurrentDate(newDate);
   };
 
-  const handleDateClick = (dateStr, dayObligations) => {
+  const handleDateClick = (dateStr, dayOccurrences) => {
     setSelectedDate(dateStr);
-    setSelectedObligations(dayObligations);
+    setSelectedOccurrences(dayOccurrences);
   };
 
-  // Navigate to obligation details page
   const navigateToObligation = (obligationId) => {
     navigate(`/compliance/${obligationId}`);
   };
 
-  // Helper function to format date consistently
   const formatDate = (date) => {
     if (!date) return null;
     const d = new Date(date);
@@ -167,12 +214,16 @@ const ComplianceCalendar = () => {
     return `${year}-${month}-${day}`;
   };
 
-  // Get obligations for a specific date
-  const getObligationsForDate = (dateStr) => {
-    return obligations.filter((obligation) => {
-      if (!obligation.calculated_due_date) return false;
-      const formattedDueDate = formatDate(obligation.calculated_due_date);
-      return formattedDueDate === dateStr;
+  // Get occurrences for a specific date - NOW USES due_date NOT instance_date
+  const getOccurrencesForDate = (year, month, day) => {
+    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    
+    return occurrences.filter((occurrence) => {
+      // Use due_date for display on calendar, not instance_date
+      const dueDate = new Date(occurrence.due_date);
+      return dueDate.getFullYear() === year && 
+             dueDate.getMonth() === month && 
+             dueDate.getDate() === day;
     });
   };
 
@@ -181,7 +232,7 @@ const ComplianceCalendar = () => {
     const days = [];
     const monthName = currentDate.toLocaleString("default", { month: "long" });
     const year = currentDate.getFullYear();
-    const month = String(currentDate.getMonth() + 1).padStart(2, "0");
+    const month = currentDate.getMonth();
 
     // Empty cells for days before month starts
     for (let i = 0; i < firstDayOfMonth; i++) {
@@ -190,24 +241,23 @@ const ComplianceCalendar = () => {
 
     // Days of the month
     for (let day = 1; day <= daysInMonth; day++) {
-      const dateStr = `${year}-${month}-${String(day).padStart(2, "0")}`;
-      const dayObligations = getObligationsForDate(dateStr);
-      const hasOverdue = dayObligations.some(o => o.isOverdue);
+      const dayOccurrences = getOccurrencesForDate(year, month, day);
+      const hasOverdue = dayOccurrences.some(o => o.isOverdue);
 
       // Check if today
       const today = new Date();
       const isToday = 
         today.getFullYear() === year &&
-        today.getMonth() === currentDate.getMonth() &&
+        today.getMonth() === month &&
         today.getDate() === day;
 
       // Check if date is in the past
-      const isPast = new Date(year, currentDate.getMonth(), day) < new Date(today.setHours(0, 0, 0, 0));
+      const isPast = new Date(year, month, day) < new Date(today.setHours(0, 0, 0, 0));
 
       days.push(
         <div
           key={day}
-          onClick={() => handleDateClick(dateStr, dayObligations)}
+          onClick={() => handleDateClick(`${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`, dayOccurrences)}
           className={`min-h-16 sm:min-h-20 md:min-h-24 border border-gray-200 p-0.5 sm:p-1 hover:bg-gray-50 transition-colors cursor-pointer ${
             isToday ? "bg-green-50 border-green-300" : ""
           } ${isPast && !isToday ? "bg-gray-50/30" : ""} ${
@@ -220,37 +270,37 @@ const ComplianceCalendar = () => {
             }`}>
               {day}
             </span>
-            {dayObligations.length > 0 && (
+            {dayOccurrences.length > 0 && (
               <span className={`text-[9px] sm:text-xs px-1 sm:px-1.5 py-0.5 rounded-full ${
                 hasOverdue ? "bg-red-100 text-red-800" : "bg-[#8cc63e] text-white"
               }`}>
-                {dayObligations.length}
+                {dayOccurrences.length}
               </span>
             )}
           </div>
           <div className="mt-0.5 sm:mt-1 space-y-0.5 max-h-10 sm:max-h-14 md:max-h-16 overflow-y-auto">
-            {dayObligations.slice(0, 2).map((obligation) => (
+            {dayOccurrences.slice(0, 2).map((occurrence) => (
               <div 
-                key={obligation.id} 
-                className={`text-[8px] sm:text-xs truncate ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
+                key={occurrence.id} 
+                className={`text-[8px] sm:text-xs truncate ${occurrence.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
                 onClick={(e) => {
                   e.stopPropagation();
-                  navigateToObligation(obligation.obligation_id);
+                  navigateToObligation(occurrence.obligation?.obligation_id);
                 }}
               >
-                <span className={`font-medium ${obligation.isOverdue ? "text-red-600" : ""}`}>
-                  {obligation.name || "Unknown"}
+                <span className={`font-medium ${occurrence.isOverdue ? "text-red-600" : ""}`}>
+                  {occurrence.obligation?.name || "Unknown"}
                 </span>
                 <span
-                  className={`ml-0.5 sm:ml-1 px-0.5 sm:px-1 text-[7px] sm:text-xs rounded ${getStatusBadge(obligation.current_status, obligation.isOverdue)}`}
+                  className={`ml-0.5 sm:ml-1 px-0.5 sm:px-1 text-[7px] sm:text-xs rounded ${getStatusBadge(occurrence.status, occurrence.isOverdue)}`}
                 >
-                  {obligation.isOverdue ? "Overdue" : obligation.current_status}
+                  {occurrence.isOverdue ? "Overdue" : occurrence.status}
                 </span>
               </div>
             ))}
-            {dayObligations.length > 2 && (
+            {dayOccurrences.length > 2 && (
               <div className="text-[7px] sm:text-xs text-gray-500">
-                +{dayObligations.length - 2} more
+                +{dayOccurrences.length - 2} more
               </div>
             )}
           </div>
@@ -266,13 +316,13 @@ const ComplianceCalendar = () => {
           </h3>
           <div className="flex flex-wrap gap-1 sm:gap-2">
             <button
-              onClick={() => navigateMonth(-1)}
+              onClick={() => navigatePeriod(-1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               ← Prev
             </button>
             <button
-              onClick={() => navigateMonth(1)}
+              onClick={() => navigatePeriod(1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               Next →
@@ -312,27 +362,19 @@ const ComplianceCalendar = () => {
       ["October", "November", "December"],
     ];
 
-    // Get months in quarter
     const months = quarterMonths[quarter];
     const monthIndices = [quarter * 3, quarter * 3 + 1, quarter * 3 + 2];
 
-    // Get obligations for this quarter
-    const quarterObligations = obligations.filter((obligation) => {
-      if (!obligation.calculated_due_date) return false;
-      const instDate = new Date(obligation.calculated_due_date);
-      const instMonth = instDate.getMonth();
-      const instYear = instDate.getFullYear();
-      return instYear === year && monthIndices.includes(instMonth);
-    });
-
-    // Group by month
+    // Group occurrences by month using due_date
     const groupedByMonth = {};
     monthIndices.forEach((monthIdx, index) => {
       const monthName = quarterMonths[quarter][index];
-      groupedByMonth[monthName] = quarterObligations.filter((obligation) => {
-        const instDate = new Date(obligation.calculated_due_date);
-        return instDate.getMonth() === monthIdx;
+      const monthOccurrences = occurrences.filter(occ => {
+        const dueDate = new Date(occ.due_date);
+        return dueDate.getFullYear() === year && 
+               dueDate.getMonth() === monthIdx;
       });
+      groupedByMonth[monthName] = monthOccurrences;
     });
 
     return (
@@ -343,21 +385,13 @@ const ComplianceCalendar = () => {
           </h3>
           <div className="flex flex-wrap gap-1 sm:gap-2">
             <button
-              onClick={() => {
-                const newDate = new Date(currentDate);
-                newDate.setMonth(newDate.getMonth() - 3);
-                setCurrentDate(newDate);
-              }}
+              onClick={() => navigatePeriod(-1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               ← Prev
             </button>
             <button
-              onClick={() => {
-                const newDate = new Date(currentDate);
-                newDate.setMonth(newDate.getMonth() + 3);
-                setCurrentDate(newDate);
-              }}
+              onClick={() => navigatePeriod(1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               Next →
@@ -374,15 +408,15 @@ const ComplianceCalendar = () => {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
           {months.map((monthName, index) => {
-            const monthObligations = groupedByMonth[monthName] || [];
-            const completed = monthObligations.filter(
-              (o) => o.current_status === "Completed"
+            const monthOccurrences = groupedByMonth[monthName] || [];
+            const completed = monthOccurrences.filter(
+              (o) => o.status === "Completed"
             ).length;
-            const overdue = monthObligations.filter(
+            const overdue = monthOccurrences.filter(
               (o) => o.isOverdue
             ).length;
-            const inProgress = monthObligations.filter(
-              (o) => o.current_status === "In Progress" && !o.isOverdue
+            const inProgress = monthOccurrences.filter(
+              (o) => o.status === "In Progress" && !o.isOverdue
             ).length;
 
             return (
@@ -396,24 +430,24 @@ const ComplianceCalendar = () => {
                       </span>
                     )}
                     <span className="text-[10px] sm:text-xs text-white px-1.5 sm:px-2 py-0.5 rounded-full" style={{ backgroundColor: "#8cc63e" }}>
-                      {monthObligations.length}
+                      {monthOccurrences.length}
                     </span>
                   </div>
                 </div>
-                {monthObligations.length === 0 ? (
+                {monthOccurrences.length === 0 ? (
                   <p className="text-xs sm:text-sm text-gray-500 text-center py-3 sm:py-4">No obligations</p>
                 ) : (
                   <>
                     <div className="flex justify-between text-xs sm:text-sm mb-1 sm:mb-2">
                       <span className="text-gray-600">Completed:</span>
                       <span className="font-medium text-green-600">
-                        {completed}/{monthObligations.length}
+                        {completed}/{monthOccurrences.length}
                       </span>
                     </div>
                     <div className="flex justify-between text-xs sm:text-sm mb-1 sm:mb-2">
                       <span className="text-gray-600">In Progress:</span>
                       <span className="font-medium text-blue-600">
-                        {inProgress}/{monthObligations.length}
+                        {inProgress}/{monthOccurrences.length}
                       </span>
                     </div>
                     {overdue > 0 && (
@@ -428,44 +462,44 @@ const ComplianceCalendar = () => {
                       <div
                         className="rounded-full h-1.5 sm:h-2 transition-all duration-300"
                         style={{
-                          width: `${(completed / monthObligations.length) * 100}%`,
+                          width: `${(completed / monthOccurrences.length) * 100}%`,
                           backgroundColor: "#8cc63e"
                         }}
                       ></div>
                     </div>
                     <div className="mt-2 sm:mt-3 space-y-1 sm:space-y-2 max-h-36 sm:max-h-48 overflow-y-auto">
-                      {monthObligations.slice(0, 3).map((obligation) => (
+                      {monthOccurrences.slice(0, 3).map((occurrence) => (
                         <div
-                          key={obligation.id}
+                          key={occurrence.id}
                           className={`rounded p-1.5 sm:p-2 hover:bg-gray-100 transition-colors cursor-pointer ${
-                            obligation.isOverdue ? "bg-red-50 border-l-2 sm:border-l-4 border-l-red-500" : "bg-gray-50"
+                            occurrence.isOverdue ? "bg-red-50 border-l-2 sm:border-l-4 border-l-red-500" : "bg-gray-50"
                           }`}
-                          onClick={() => navigateToObligation(obligation.obligation_id)}
+                          onClick={() => navigateToObligation(occurrence.obligation?.obligation_id)}
                         >
                           <div className="flex justify-between items-start">
                             <p className={`text-[10px] sm:text-xs font-medium truncate flex-1 ${
-                              obligation.isOverdue ? "text-red-600" : "text-gray-900"
+                              occurrence.isOverdue ? "text-red-600" : "text-gray-900"
                             }`}>
-                              {obligation.name}
+                              {occurrence.obligation?.name}
                             </p>
                             <span
-                              className={`ml-1 px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-xs rounded ${getStatusBadge(obligation.current_status, obligation.isOverdue)}`}
+                              className={`ml-1 px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-xs rounded ${getStatusBadge(occurrence.status, occurrence.isOverdue)}`}
                             >
-                              {obligation.isOverdue ? "Overdue" : obligation.current_status}
+                              {occurrence.isOverdue ? "Overdue" : occurrence.status}
                             </span>
                           </div>
                           <div className="flex flex-wrap gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
                             <span
-                              className={`px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-[10px] rounded ${getTypeBadge(obligation.frequency)}`}
+                              className={`px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-[10px] rounded ${getTypeBadge(occurrence.obligation?.frequency)}`}
                             >
-                              {obligation.frequency}
+                              {occurrence.obligation?.frequency}
                             </span>
                             <span
-                              className={`px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-[10px] rounded ${getDomainColor(obligation.domain)}`}
+                              className={`px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-[10px] rounded ${getDomainColor(occurrence.obligation?.domain)}`}
                             >
-                              {obligation.domain}
+                              {occurrence.obligation?.domain}
                             </span>
-                            {obligation.isOverdue && (
+                            {occurrence.isOverdue && (
                               <span className="px-1 sm:px-1.5 py-0.5 text-[8px] sm:text-[10px] rounded bg-red-200 text-red-800">
                                 ⚠ Overdue
                               </span>
@@ -473,9 +507,9 @@ const ComplianceCalendar = () => {
                           </div>
                         </div>
                       ))}
-                      {monthObligations.length > 3 && (
+                      {monthOccurrences.length > 3 && (
                         <div className="text-[9px] sm:text-xs text-gray-500 text-center py-0.5 sm:py-1">
-                          +{monthObligations.length - 3} more
+                          +{monthOccurrences.length - 3} more
                         </div>
                       )}
                     </div>
@@ -496,20 +530,15 @@ const ComplianceCalendar = () => {
       "July", "August", "September", "October", "November", "December"
     ];
 
-    // Get obligations for this year
-    const yearObligations = obligations.filter((obligation) => {
-      if (!obligation.calculated_due_date) return false;
-      const instDate = new Date(obligation.calculated_due_date);
-      return instDate.getFullYear() === year;
-    });
-
-    // Group by month
+    // Group occurrences by month using due_date
     const groupedByMonth = {};
     months.forEach((month, index) => {
-      groupedByMonth[month] = yearObligations.filter((obligation) => {
-        const instDate = new Date(obligation.calculated_due_date);
-        return instDate.getMonth() === index;
+      const monthOccurrences = occurrences.filter(occ => {
+        const dueDate = new Date(occ.due_date);
+        return dueDate.getFullYear() === year && 
+               dueDate.getMonth() === index;
       });
+      groupedByMonth[month] = monthOccurrences;
     });
 
     // Get current month for highlighting
@@ -521,21 +550,13 @@ const ComplianceCalendar = () => {
           <h3 className="text-base sm:text-lg font-semibold text-gray-900">Year {year}</h3>
           <div className="flex flex-wrap gap-1 sm:gap-2">
             <button
-              onClick={() => {
-                const newDate = new Date(currentDate);
-                newDate.setFullYear(newDate.getFullYear() - 1);
-                setCurrentDate(newDate);
-              }}
+              onClick={() => navigatePeriod(-1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               ← Prev
             </button>
             <button
-              onClick={() => {
-                const newDate = new Date(currentDate);
-                newDate.setFullYear(newDate.getFullYear() + 1);
-                setCurrentDate(newDate);
-              }}
+              onClick={() => navigatePeriod(1)}
               className="px-2 sm:px-3 py-1 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors text-xs sm:text-sm text-gray-700"
             >
               Next →
@@ -552,15 +573,15 @@ const ComplianceCalendar = () => {
 
         <div className="grid grid-cols-1 xs:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-4">
           {months.map((monthName, index) => {
-            const monthObligations = groupedByMonth[monthName] || [];
-            const completed = monthObligations.filter(
-              (o) => o.current_status === "Completed"
+            const monthOccurrences = groupedByMonth[monthName] || [];
+            const completed = monthOccurrences.filter(
+              (o) => o.status === "Completed"
             ).length;
-            const overdue = monthObligations.filter(
+            const overdue = monthOccurrences.filter(
               (o) => o.isOverdue
             ).length;
-            const inProgress = monthObligations.filter(
-              (o) => o.current_status === "In Progress" && !o.isOverdue
+            const inProgress = monthOccurrences.filter(
+              (o) => o.status === "In Progress" && !o.isOverdue
             ).length;
             const isCurrentMonth = index === currentMonth && new Date().getFullYear() === year;
 
@@ -582,27 +603,27 @@ const ComplianceCalendar = () => {
                         {overdue}
                       </span>
                     )}
-                    {monthObligations.length > 0 && (
+                    {monthOccurrences.length > 0 && (
                       <span className="text-[9px] sm:text-xs text-white px-1 sm:px-1.5 py-0.5 rounded-full" style={{ backgroundColor: "#8cc63e" }}>
-                        {monthObligations.length}
+                        {monthOccurrences.length}
                       </span>
                     )}
                   </div>
                 </div>
-                {monthObligations.length === 0 ? (
+                {monthOccurrences.length === 0 ? (
                   <p className="text-xs sm:text-sm text-gray-500 text-center py-2 sm:py-4">No obligations</p>
                 ) : (
                   <>
                     <div className="flex justify-between text-[10px] sm:text-sm">
                       <span className="text-gray-600">Completed:</span>
                       <span className="font-medium text-green-600">
-                        {completed}/{monthObligations.length}
+                        {completed}/{monthOccurrences.length}
                       </span>
                     </div>
                     <div className="flex justify-between text-[10px] sm:text-sm">
                       <span className="text-gray-600">In Progress:</span>
                       <span className="font-medium text-blue-600">
-                        {inProgress}/{monthObligations.length}
+                        {inProgress}/{monthOccurrences.length}
                       </span>
                     </div>
                     {overdue > 0 && (
@@ -617,31 +638,31 @@ const ComplianceCalendar = () => {
                       <div
                         className="rounded-full h-1 sm:h-1.5 transition-all duration-300"
                         style={{
-                          width: `${(completed / monthObligations.length) * 100}%`,
+                          width: `${(completed / monthOccurrences.length) * 100}%`,
                           backgroundColor: "#8cc63e"
                         }}
                       ></div>
                     </div>
                     <div className="mt-1 sm:mt-2 space-y-0.5 sm:space-y-1 max-h-24 sm:max-h-32 overflow-y-auto">
-                      {monthObligations.slice(0, 2).map((obligation) => (
+                      {monthOccurrences.slice(0, 2).map((occurrence) => (
                         <div 
-                          key={obligation.id} 
-                          className={`text-[9px] sm:text-xs truncate cursor-pointer ${obligation.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
-                          onClick={() => navigateToObligation(obligation.obligation_id)}
+                          key={occurrence.id} 
+                          className={`text-[9px] sm:text-xs truncate cursor-pointer ${occurrence.isOverdue ? "bg-red-50 rounded px-0.5" : ""}`}
+                          onClick={() => navigateToObligation(occurrence.obligation?.obligation_id)}
                         >
-                          <span className={`font-medium ${obligation.isOverdue ? "text-red-600" : ""}`}>
-                            {obligation.name || "Unknown"}
+                          <span className={`font-medium ${occurrence.isOverdue ? "text-red-600" : ""}`}>
+                            {occurrence.obligation?.name || "Unknown"}
                           </span>
                           <span
-                            className={`ml-0.5 sm:ml-1 px-0.5 sm:px-1 text-[8px] sm:text-xs rounded ${getStatusBadge(obligation.current_status, obligation.isOverdue)}`}
+                            className={`ml-0.5 sm:ml-1 px-0.5 sm:px-1 text-[8px] sm:text-xs rounded ${getStatusBadge(occurrence.status, occurrence.isOverdue)}`}
                           >
-                            {obligation.isOverdue ? "Overdue" : obligation.current_status}
+                            {occurrence.isOverdue ? "Overdue" : occurrence.status}
                           </span>
                         </div>
                       ))}
-                      {monthObligations.length > 2 && (
+                      {monthOccurrences.length > 2 && (
                         <div className="text-[8px] sm:text-xs text-gray-500">
-                          +{monthObligations.length - 2} more
+                          +{monthOccurrences.length - 2} more
                         </div>
                       )}
                     </div>
@@ -655,11 +676,11 @@ const ComplianceCalendar = () => {
     );
   };
 
-  // Modal for showing obligations on a selected date
+  // Modal for showing occurrences on a selected date
   const renderModal = () => {
-    if (!selectedDate || selectedObligations.length === 0) return null;
+    if (!selectedDate || selectedOccurrences.length === 0) return null;
 
-    const hasOverdue = selectedObligations.some(o => o.isOverdue);
+    const hasOverdue = selectedOccurrences.some(o => o.isOverdue);
 
     return (
       <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
@@ -683,7 +704,7 @@ const ComplianceCalendar = () => {
             <button
               onClick={() => {
                 setSelectedDate(null);
-                setSelectedObligations([]);
+                setSelectedOccurrences([]);
               }}
               className={`${hasOverdue ? "text-gray-400 hover:text-gray-600" : "text-white/80 hover:text-white"} transition-colors`}
             >
@@ -694,93 +715,92 @@ const ComplianceCalendar = () => {
           </div>
           <div className="p-3 sm:p-4 overflow-y-auto max-h-[60vh]">
             <div className="space-y-2 sm:space-y-3">
-              {selectedObligations.map((obligation) => (
+              {selectedOccurrences.map((occurrence) => (
                 <div
-                  key={obligation.id}
+                  key={occurrence.id}
                   className={`border rounded-lg p-3 sm:p-4 hover:shadow-md transition-shadow cursor-pointer ${
-                    obligation.isOverdue ? "border-red-300 bg-red-50/50" : "bg-white"
+                    occurrence.isOverdue ? "border-red-300 bg-red-50/50" : "bg-white"
                   }`}
                   onClick={() => {
                     setSelectedDate(null);
-                    setSelectedObligations([]);
-                    navigateToObligation(obligation.obligation_id);
+                    setSelectedOccurrences([]);
+                    navigateToObligation(occurrence.obligation?.obligation_id);
                   }}
                 >
                   <div className="flex flex-col sm:flex-row justify-between items-start">
                     <div className="flex-1 w-full sm:w-auto">
                       <div className="flex flex-wrap items-center gap-1 sm:gap-2">
-                        <p className={`text-sm sm:text-base font-medium ${obligation.isOverdue ? "text-red-600" : "text-gray-900"}`}>
-                          {obligation.name || "Unknown Obligation"}
+                        <p className={`text-sm sm:text-base font-medium ${occurrence.isOverdue ? "text-red-600" : "text-gray-900"}`}>
+                          {occurrence.obligation?.name || "Unknown Obligation"}
                         </p>
-                        {obligation.isOverdue && (
+                        {occurrence.isOverdue && (
                           <span className="px-1.5 sm:px-2 py-0.5 text-[10px] sm:text-xs rounded-full bg-red-100 text-red-800">
                             ⚠ Overdue
                           </span>
                         )}
                       </div>
                       <p className="text-xs sm:text-sm text-gray-500 mt-0.5">
-                        {obligation.obligation_id || ""} • {obligation.domain || ""}
+                        {occurrence.obligation?.obligation_id || ""} • {occurrence.obligation?.domain || ""}
                       </p>
                       <div className="flex flex-wrap gap-1 sm:gap-2 mt-1 sm:mt-2">
                         <span
-                          className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-xs rounded-full ${getStatusBadge(obligation.current_status, obligation.isOverdue)}`}
+                          className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-xs rounded-full ${getStatusBadge(occurrence.status, occurrence.isOverdue)}`}
                         >
-                          {obligation.isOverdue ? "Overdue" : obligation.current_status}
+                          {occurrence.isOverdue ? "Overdue" : occurrence.status}
                         </span>
                         <span
-                          className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-xs rounded-full ${getTypeBadge(obligation.frequency)}`}
+                          className={`px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-xs rounded-full ${getTypeBadge(occurrence.obligation?.frequency)}`}
                         >
-                          {obligation.frequency || "N/A"}
+                          {occurrence.obligation?.frequency || "N/A"}
                         </span>
-                        {obligation.mandatory && (
+                        {occurrence.obligation?.mandatory && (
                           <span className="px-1.5 sm:px-2 py-0.5 text-[9px] sm:text-xs rounded-full bg-red-100 text-red-800">
                             Mandatory
                           </span>
                         )}
                       </div>
-                      {obligation.description && (
-                        <p className="text-xs sm:text-sm text-gray-600 mt-1 sm:mt-2">{obligation.description}</p>
+                      {occurrence.obligation?.description && (
+                        <p className="text-xs sm:text-sm text-gray-600 mt-1 sm:mt-2">{occurrence.obligation?.description}</p>
                       )}
                       <div className="grid grid-cols-1 xs:grid-cols-2 gap-x-2 sm:gap-x-4 gap-y-0.5 sm:gap-y-1 mt-1 sm:mt-2 text-[10px] sm:text-xs">
                         <div>
                           <span className="font-medium text-gray-500">Responsible:</span>
-                          <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.responsible}</span>
+                          <span className="ml-0.5 sm:ml-1 text-gray-700">{occurrence.obligation?.responsible}</span>
                         </div>
                         <div>
                           <span className="font-medium text-gray-500">Accountable:</span>
-                          <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.accountable}</span>
+                          <span className="ml-0.5 sm:ml-1 text-gray-700">{occurrence.obligation?.accountable}</span>
                         </div>
                         <div>
                           <span className="font-medium text-gray-500">Weight:</span>
-                          <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.compliance_weight}</span>
+                          <span className="ml-0.5 sm:ml-1 text-gray-700">{occurrence.obligation?.compliance_weight}</span>
                         </div>
                         <div>
                           <span className="font-medium text-gray-500">Clause:</span>
-                          <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
+                          <span className="ml-0.5 sm:ml-1 text-gray-700">{occurrence.obligation?.clause || 'N/A'}</span>
                         </div>
                         <div className="col-span-1 xs:col-span-2">
                           <span className="font-medium text-gray-500">Due Date:</span>
-                          <span className={`ml-0.5 sm:ml-1 ${obligation.isOverdue ? "text-red-600 font-bold" : "text-gray-700"}`}>
-                            {new Date(obligation.calculated_due_date).toLocaleDateString()}
+                          <span className={`ml-0.5 sm:ml-1 ${occurrence.isOverdue ? "text-red-600 font-bold" : "text-gray-700"}`}>
+                            {new Date(occurrence.due_date).toLocaleDateString()}
                           </span>
-                          {obligation.isOverdue && (
+                          {occurrence.isOverdue && (
                             <span className="ml-1 sm:ml-2 text-red-500 text-[9px] sm:text-xs">
-                              (Overdue by {Math.ceil((new Date() - new Date(obligation.calculated_due_date)) / (1000 * 60 * 60 * 24))} days)
+                              (Overdue by {Math.ceil((new Date() - new Date(occurrence.due_date)) / (1000 * 60 * 60 * 24))} days)
                             </span>
                           )}
                         </div>
-                        {/* Show region for admin */}
-                        {isAdmin && obligation.region && (
+                        {isAdmin && occurrence.obligation?.region && (
                           <div className="col-span-1 xs:col-span-2">
                             <span className="font-medium text-gray-500">Region:</span>
-                            <span className="ml-0.5 sm:ml-1 text-gray-700">{obligation.region}</span>
+                            <span className="ml-0.5 sm:ml-1 text-gray-700">{occurrence.obligation?.region}</span>
                           </div>
                         )}
                       </div>
                     </div>
-                    {obligation.due_date_rule && (
+                    {occurrence.obligation?.due_date_rule && (
                       <div className="text-xs text-gray-500 mt-2 sm:mt-0 sm:ml-4">
-                        <p className="text-[9px] sm:text-xs text-gray-600 italic">"{obligation.due_date_rule}"</p>
+                        <p className="text-[9px] sm:text-xs text-gray-600 italic">"{occurrence.obligation?.due_date_rule}"</p>
                       </div>
                     )}
                   </div>
@@ -797,7 +817,7 @@ const ComplianceCalendar = () => {
             <button
               onClick={() => {
                 setSelectedDate(null);
-                setSelectedObligations([]);
+                setSelectedOccurrences([]);
               }}
               className="w-full px-4 py-2 text-white rounded-md hover:opacity-90 transition-colors text-sm"
               style={{ backgroundColor: "#8cc63e" }}
@@ -821,17 +841,20 @@ const ComplianceCalendar = () => {
     );
   }
 
-  // Get stats for the current month from obligation_progress
-  const monthStats = getMonthStats();
+  // Get stats for the current view
+  const viewStats = getViewStats();
 
   return (
     <div className="space-y-4 sm:space-y-6 p-2 sm:p-4 md:p-6">
-      {/* Header - Responsive */}
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">Compliance Calendar</h1>
           <p className="text-xs sm:text-sm text-gray-500 mt-0.5 sm:mt-1">
-            {currentDate.toLocaleString("default", { month: "long" })} {currentDate.getFullYear()} - {monthStats.total} obligations
+            {view === "month" && `${currentDate.toLocaleString("default", { month: "long" })} ${currentDate.getFullYear()}`}
+            {view === "quarter" && `Q${Math.floor(currentDate.getMonth() / 3) + 1} ${currentDate.getFullYear()}`}
+            {view === "year" && `Year ${currentDate.getFullYear()}`}
+            {" - "}{viewStats.total} obligations
             {!isAdmin && userRegion && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
@@ -905,27 +928,27 @@ const ComplianceCalendar = () => {
         </div>
       </div>
 
-      {/* Stats Summary - Shows counts from obligation_progress */}
+      {/* Stats Summary */}
       <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-gray-400">
           <p className="text-[10px] sm:text-sm text-gray-500">Total</p>
-          <p className="text-lg sm:text-2xl font-bold text-gray-900">{monthStats.total}</p>
+          <p className="text-lg sm:text-2xl font-bold text-gray-900">{viewStats.total}</p>
         </div>
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-green-500">
           <p className="text-[10px] sm:text-sm text-gray-500">Completed</p>
-          <p className="text-lg sm:text-2xl font-bold text-green-600">{monthStats.completed}</p>
+          <p className="text-lg sm:text-2xl font-bold text-green-600">{viewStats.completed}</p>
         </div>
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-blue-500">
           <p className="text-[10px] sm:text-sm text-gray-500">In Progress</p>
-          <p className="text-lg sm:text-2xl font-bold text-blue-600">{monthStats.inProgress}</p>
+          <p className="text-lg sm:text-2xl font-bold text-blue-600">{viewStats.inProgress}</p>
         </div>
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-red-500 bg-red-50">
           <p className="text-[10px] sm:text-sm text-red-600 font-medium">⚠ Overdue</p>
-          <p className="text-lg sm:text-2xl font-bold text-red-600">{monthStats.overdue}</p>
+          <p className="text-lg sm:text-2xl font-bold text-red-600">{viewStats.overdue}</p>
         </div>
       </div>
 
-      {/* Legend - Responsive */}
+      {/* Legend */}
       <div className="bg-white rounded-lg shadow p-2 sm:p-4">
         <div className="flex flex-wrap gap-2 sm:gap-4 items-start sm:items-center">
           <span className="text-xs sm:text-sm font-medium text-gray-700">Frequency:</span>
@@ -951,7 +974,7 @@ const ComplianceCalendar = () => {
               <span className="text-[10px] sm:text-xs text-gray-600">Event Based</span>
             </div>
           </div>
-          <span className="text-xs sm:text-sm font-medium text-gray-700">Status (from obligation_progress):</span>
+          <span className="text-xs sm:text-sm font-medium text-gray-700">Status:</span>
           <div className="flex flex-wrap gap-1.5 sm:gap-3">
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-green-100 text-green-800 rounded">Completed</span>
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-blue-100 text-blue-800 rounded">In Progress</span>
@@ -960,7 +983,7 @@ const ComplianceCalendar = () => {
         </div>
       </div>
 
-      {/* Calendar View - Responsive */}
+      {/* Calendar View */}
       <div className="bg-white rounded-lg shadow p-2 sm:p-4 md:p-6 overflow-x-auto">
         {view === "month" && renderMonthView()}
         {view === "quarter" && renderQuarterView()}

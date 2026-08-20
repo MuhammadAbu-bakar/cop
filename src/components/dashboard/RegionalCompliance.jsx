@@ -316,21 +316,21 @@ const RegionalCompliance = ({ userRegion, isAdmin }) => {
           {/* Desktop Table View */}
           <div className="hidden sm:block overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-[#b6d981]">
+              <thead className="bg-[#ff0099]">
                 <tr>
-                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-white uppercase tracking-wider">
                     Region
                   </th>
-                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-white uppercase tracking-wider">
                     Compliance
                   </th>
-                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-white uppercase tracking-wider">
                     Evidence
                   </th>
-                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-white uppercase tracking-wider">
                     Overdue
                   </th>
-                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                  <th className="px-2 py-1.5 text-left text-[10px] font-medium text-white uppercase tracking-wider">
                     Risk
                   </th>
                 </tr>
