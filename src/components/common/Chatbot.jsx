@@ -3,7 +3,7 @@ import { supabase } from "../../api/supabase";
 
 /*
 ==========================================================
-GROQ CONFIGURATION
+OPENAI CONFIGURATION
 ==========================================================
 
 WARNING:
@@ -14,14 +14,14 @@ but for production move the key to a backend/
 Supabase Edge Function.
 */
 
-const GROQ_API_KEY =
-  "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";
+const OPENAI_API_KEY =
+  "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";
 
-const GROQ_URL =
-  "https://api.groq.com/openai/v1/chat/completions";
+const OPENAI_URL =
+  "https://api.openai.com/v1/chat/completions";
 
-const GROQ_MODEL =
-  "llama-3.3-70b-versatile";
+// Available models: gpt-4, gpt-4-turbo-preview, gpt-3.5-turbo, gpt-3.5-turbo-16k
+const OPENAI_MODEL = "gpt-3.5-turbo-0125"; // Using GPT-3.5 for cost efficiency, change to gpt-4 for better quality
 
 
 const Chatbot = () => {
@@ -177,10 +177,10 @@ ${doc.content}
 
 
   // ========================================================
-  // CALL GROQ
+  // CALL OPENAI
   // ========================================================
 
-  const askGroq = async (
+  const askOpenAI = async (
     question,
     policyContext
   ) => {
@@ -256,102 +256,93 @@ RETRIEVED POLICY INFORMATION:
 ${policyContext}
 `;
 
+    try {
+      const response = await fetch(
+        OPENAI_URL,
+        {
+          method: "POST",
 
-    const response = await fetch(
-      GROQ_URL,
-      {
-        method: "POST",
+          headers: {
+            "Content-Type": "application/json",
 
-        headers: {
-          "Content-Type": "application/json",
+            "Authorization":
+              `Bearer ${OPENAI_API_KEY}`,
+          },
 
-          Authorization:
-            `Bearer ${GROQ_API_KEY}`,
-        },
+          body: JSON.stringify({
 
-        body: JSON.stringify({
+            model: OPENAI_MODEL,
 
-          model: GROQ_MODEL,
+            messages: [
 
-          messages: [
+              {
+                role: "system",
+                content: systemPrompt,
+              },
 
-            {
-              role: "system",
-              content: systemPrompt,
-            },
+              ...messages
+                .filter(
+                  (message) =>
+                    message.sender === "user" ||
+                    message.sender === "bot"
+                )
+                .slice(-6)
+                .map((message) => ({
 
-            ...messages
-              .filter(
-                (message) =>
-                  message.sender === "user" ||
-                  message.sender === "bot"
-              )
-              .slice(-6)
-              .map((message) => ({
+                  role:
+                    message.sender === "user"
+                      ? "user"
+                      : "assistant",
 
-                role:
-                  message.sender === "user"
-                    ? "user"
-                    : "assistant",
+                  content: message.text,
 
-                content: message.text,
+                })),
 
-              })),
+              {
+                role: "user",
+                content: question,
+              },
 
-            {
-              role: "user",
-              content: question,
-            },
+            ],
 
-          ],
+            temperature: 0.1,
 
-          temperature: 0.1,
+            max_tokens: 1500,
 
-          max_completion_tokens: 1500,
+            top_p: 0.9,
 
-          top_p: 0.9,
+          }),
+        }
+      );
 
-        }),
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        console.error("OpenAI API error:", errorData);
+        
+        // Handle specific error cases
+        if (response.status === 429) {
+          throw new Error("Rate limit exceeded. Please wait a moment and try again.");
+        } else if (response.status === 401) {
+          throw new Error("Invalid API key. Please check your OpenAI API key.");
+        } else if (response.status === 402) {
+          throw new Error("Insufficient credits. Please add payment method to your OpenAI account.");
+        } else {
+          throw new Error(`OpenAI API error: ${response.status} - ${errorData.error?.message || response.statusText}`);
+        }
       }
-    );
 
+      const result = await response.json();
+      const answer = result?.choices?.[0]?.message?.content;
 
-    if (!response.ok) {
+      if (!answer) {
+        throw new Error("OpenAI returned an empty response.");
+      }
 
-      const errorText =
-        await response.text();
-
-      console.error(
-        "Groq API error:",
-        errorText
-      );
-
-      throw new Error(
-        `Groq API error: ${response.status}`
-      );
-
+      return answer;
+    } catch (error) {
+      console.error("OpenAI API call failed:", error);
+      throw error;
     }
-
-
-    const result =
-      await response.json();
-
-
-    const answer =
-      result?.choices?.[0]?.message?.content;
-
-
-    if (!answer) {
-
-      throw new Error(
-        "Groq returned an empty response."
-      );
-
-    }
-
-
-    return answer;
-
   };
 
 
@@ -445,11 +436,11 @@ ${policyContext}
 
 
       // ----------------------------------------------------
-      // ASK GROQ
+      // ASK OPENAI
       // ----------------------------------------------------
 
       const answer =
-        await askGroq(
+        await askOpenAI(
           question,
           policyContext
         );
@@ -1350,7 +1341,7 @@ ${error?.message || "Unknown error"}`,
                 text-center
               "
             >
-              Answers are generated from the policy database
+              Answers are generated from the policy database using OpenAI
             </p>
 
           </div>
