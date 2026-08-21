@@ -21,7 +21,7 @@ const getRegionId = async (regionName) => {
   }
 }
 
-// Determine occurrence status based on due date
+// Determine occurrence status based on due date - UPDATED for new status flow
 const determineOccurrenceStatus = (dueDate) => {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -29,13 +29,14 @@ const determineOccurrenceStatus = (dueDate) => {
   dueDateObj.setHours(0, 0, 0, 0);
   const diffDays = Math.ceil((dueDateObj - today) / (1000 * 60 * 60 * 24));
   
+  // New status flow: Open (default), Submitted/Under Review, Closed
   if (diffDays < 0) return 'Overdue';
   if (diffDays === 0) return 'Due Today';
-  if (diffDays <= 3) return 'Pending';
+  if (diffDays <= 7) return 'Pending';
   return 'In Progress';
 }
 
-// Generate occurrences for a cyclic obligation
+// Generate occurrences for a cyclic obligation - UPDATED with Open as default status
 export const generateOccurrences = async (obligationId, regionId, frequency, dueDate, monthsToGenerate = 12) => {
   try {
     const dueDateObj = new Date(dueDate);
@@ -50,7 +51,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
     else if (frequency === 'Annual') monthIncrement = 12;
     else if (frequency === 'Monthly') monthIncrement = 1;
     else {
-      // For non-cyclic frequencies, generate just one occurrence
+      // For non-cyclic frequencies, generate just one occurrence with status 'Open'
       const dueDateStr = dueDateObj.toISOString().split('T')[0];
       const instanceDate = new Date(dueDateObj.getFullYear(), dueDateObj.getMonth(), 1);
       
@@ -59,7 +60,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
         region_id: regionId,
         instance_date: instanceDate.toISOString().split('T')[0],
         due_date: dueDateStr,
-        status: determineOccurrenceStatus(dueDateObj),
+        status: 'Open', // Default status for new obligations
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
@@ -73,7 +74,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
       return { data, error: null };
     }
 
-    // Generate occurrences for cyclic obligations
+    // Generate occurrences for cyclic obligations - all start with 'Open' status
     for (let i = 0; i < monthsToGenerate; i++) {
       const occurrenceDate = new Date(
         startDate.getFullYear(),
@@ -111,7 +112,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
         region_id: regionId,
         instance_date: instanceDate.toISOString().split('T')[0],
         due_date: dueDateForOccurrence.toISOString().split('T')[0],
-        status: determineOccurrenceStatus(dueDateForOccurrence),
+        status: 'Open', // Default status for new occurrences
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
@@ -198,7 +199,7 @@ export const getObligations = async (filters = {}, userRegion = null, isAdmin = 
         }
 
         const progress = obligation.obligation_progress?.[0] || null;
-        const status = progress?.status || obligation.current_status || 'Not Started';
+        const status = progress?.status || obligation.current_status || 'Open';
         
         return {
           ...obligation,
@@ -439,17 +440,30 @@ export const getOccurrencesForMonth = async (regionId, year, month) => {
   }
 }
 
-// Update occurrence status
+// Update occurrence status - UPDATED for new status flow
 export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = null, comment = '') => {
   try {
+    // Validate status - only allow: 'Open', 'Submitted/Under Review', 'Closed'
+    const validStatuses = ['Open', 'Submitted/Under Review', 'Closed'];
+    if (!validStatuses.includes(status)) {
+      // Map old statuses to new ones
+      if (status === 'Completed' || status === 'Approved') {
+        status = 'Closed';
+      } else if (status === 'Submitted' || status === 'Under Review') {
+        status = 'Submitted/Under Review';
+      } else {
+        status = 'Open';
+      }
+    }
+
     const updateData = {
       status: status,
       updated_at: new Date().toISOString()
     };
 
-    if (status === 'Completed') {
+    if (status === 'Closed') {
       updateData.completed_at = new Date().toISOString();
-    } else if (status === 'In Progress') {
+    } else if (status === 'Submitted/Under Review') {
       updateData.started_at = new Date().toISOString();
     }
 
@@ -475,13 +489,246 @@ export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = 
   }
 }
 
-// Upload evidence for a specific occurrence
+// ============================================================
+// NEW APPROVAL FUNCTIONS
+// ============================================================
+
+// Get occurrences pending approval (Submitted/Under Review)
+// Get occurrences pending approval (Submitted/Under Review) - FIXED to include evidence
+export const getPendingApprovals = async (userRegion = null, isAdmin = false) => {
+  try {
+    let query = supabase
+      .from('obligation_occurrences')
+      .select(`
+        *,
+        obligation:obligations(
+          obligation_id,
+          name,
+          domain,
+          frequency,
+          description,
+          responsible,
+          accountable,
+          compliance_weight,
+          evidence_required,
+          evidence_type,
+          mandatory,
+          region,
+          clause,
+          due_date_rule
+        ),
+        evidence:evidence!evidence_occurrence_id_fkey(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by,
+          status
+        )
+      `)
+      .eq('status', 'Submitted/Under Review')
+      .order('updated_at', { ascending: false });
+
+    // Filter by region for non-admin users
+    if (!isAdmin && userRegion) {
+      const regionId = await getRegionId(userRegion);
+      if (regionId) {
+        query = query.eq('region_id', regionId);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error fetching pending approvals:', error);
+    return { data: null, error };
+  }
+};
+
+// Get approved occurrences (Closed)
+export const getApprovedOccurrences = async (userRegion = null, isAdmin = false) => {
+  try {
+    let query = supabase
+      .from('obligation_occurrences')
+      .select(`
+        *,
+        obligation:obligations(
+          obligation_id,
+          name,
+          domain,
+          frequency,
+          description,
+          responsible,
+          accountable,
+          compliance_weight,
+          evidence_required,
+          evidence_type,
+          mandatory,
+          region,
+          clause,
+          due_date_rule
+        ),
+        evidence:evidence(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by
+        )
+      `)
+      .eq('status', 'Closed')
+      .order('updated_at', { ascending: false });
+
+    // Filter by region for non-admin users
+    if (!isAdmin && userRegion) {
+      const regionId = await getRegionId(userRegion);
+      if (regionId) {
+        query = query.eq('region_id', regionId);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error fetching approved occurrences:', error);
+    return { data: null, error };
+  }
+};
+
+// Approve an occurrence (change status to Closed)
+export const approveOccurrence = async (occurrenceId, comment = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('obligation_occurrences')
+      .update({
+        status: 'Closed',
+        comments: comment || 'Approved by admin',
+        updated_at: new Date().toISOString(),
+        completed_at: new Date().toISOString()
+      })
+      .eq('id', occurrenceId)
+      .select();
+
+    if (error) throw error;
+
+    // Add to activity history
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        occurrenceId,
+        `Occurrence approved and closed`,
+        `Approved by ${user.data.user.email}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error approving occurrence:', error);
+    return { data: null, error };
+  }
+};
+
+// Reject an occurrence (change status back to Open)
+export const rejectOccurrence = async (occurrenceId, reason = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('obligation_occurrences')
+      .update({
+        status: 'Open',
+        comments: reason || 'Rejected, please resubmit',
+        updated_at: new Date().toISOString(),
+        completed_at: null,
+        started_at: null
+      })
+      .eq('id', occurrenceId)
+      .select();
+
+    if (error) throw error;
+
+    // Add to activity history
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        occurrenceId,
+        `Occurrence rejected`,
+        `Rejected by ${user.data.user.email}: ${reason}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error rejecting occurrence:', error);
+    return { data: null, error };
+  }
+};
+
+// Submit occurrence for review (when evidence is uploaded)
+// Submit occurrence for review (when evidence is uploaded)
+export const submitOccurrenceForReview = async (occurrenceId, evidenceId = null) => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const updateData = {
+      status: 'Submitted/Under Review',
+      updated_at: new Date().toISOString(),
+      started_at: new Date().toISOString()
+    };
+
+    if (evidenceId) {
+      updateData.evidence_id = evidenceId;
+    }
+
+    const { data, error } = await supabase
+      .from('obligation_occurrences')
+      .update(updateData)
+      .eq('id', occurrenceId)
+      .select();
+
+    if (error) throw error;
+
+    console.log('Occurrence submitted for review:', data);
+
+    // Add to activity history
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        occurrenceId,
+        `Evidence uploaded - Submitted for review`,
+        `Submitted by ${user.data.user.email}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error submitting occurrence for review:', error);
+    return { data: null, error };
+  }
+};
+
+// ============================================================
+// END APPROVAL FUNCTIONS
+// ============================================================
+
+// Upload evidence for a specific occurrence - UPDATED to submit for review
+// Upload evidence for a specific occurrence - FIXED
 export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligationId, regionId, userRegion = null, isAdmin = false) => {
   try {
     const user = await supabase.auth.getUser();
     if (user.error) throw user.error;
 
-    // Check if user has a region
     if (!isAdmin && !userRegion) {
       throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
     }
@@ -501,7 +748,7 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
       .from('obligation_evidence')
       .getPublicUrl(filePath);
 
-    // Save evidence record
+    // Save evidence record with occurrence_id
     const { data: evidenceData, error: evidenceError } = await supabase
       .from('evidence')
       .insert({
@@ -513,25 +760,39 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
         file_type: file.type,
         file_size: file.size,
         uploaded_by: user.data.user.id,
-        status: 'Approved'
+        status: 'Pending'
       })
       .select();
 
     if (evidenceError) throw evidenceError;
 
-    // Update occurrence with evidence_id and status
+    // CRITICAL FIX: Update occurrence status to "Submitted/Under Review"
     if (evidenceData && evidenceData[0]) {
-      await updateOccurrenceStatus(
-        occurrenceId,
-        'Completed',
-        evidenceData[0].id,
-        'Evidence uploaded'
-      );
-    }
+      const updateResult = await supabase
+        .from('obligation_occurrences')
+        .update({
+          status: 'Submitted/Under Review',
+          evidence_id: evidenceData[0].id,
+          updated_at: new Date().toISOString(),
+          started_at: new Date().toISOString()
+        })
+        .eq('id', occurrenceId)
+        .select();
 
-    // Also update obligation_progress for backward compatibility
-    if (!isAdmin && userRegion) {
-      await updateRegionProgress(obligationId, userRegion, 'In Progress', 'Evidence uploaded for occurrence');
+      if (updateResult.error) {
+        console.error('Error updating occurrence status:', updateResult.error);
+        throw updateResult.error;
+      }
+
+      console.log('Occurrence status updated to Submitted/Under Review:', updateResult.data);
+
+      // Add to activity history
+      await addActivityHistory(
+        obligationId,
+        occurrenceId,
+        `Evidence uploaded - Submitted for review`,
+        `Submitted by ${user.data.user.email}`
+      );
     }
 
     return { data: evidenceData, error: null };
@@ -539,7 +800,7 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
     console.error('Error uploading evidence for occurrence:', error);
     return { data: null, error };
   }
-}
+};
 
 // Get obligation with full details (instances, evidence, activity, progress, occurrences)
 export const getObligationWithFullDetails = async (obligationId, userRegion = null, isAdmin = false) => {

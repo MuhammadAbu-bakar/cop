@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
-import { getObligations } from "../../api/compliance";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
 import { toast } from 'react-toastify';
@@ -10,9 +9,7 @@ const ComplianceRegister = () => {
   const location = useLocation();
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
-  // FIXED: Use region_name instead of region_code
   const userRegion = profile?.region_name || null;
-  // Regional user can also add event obligations
   const canAddEvent = isAdmin || profile?.role === "regional_user";
   
   const [obligations, setObligations] = useState([]);
@@ -24,7 +21,11 @@ const ComplianceRegister = () => {
   const [filterMonth, setFilterMonth] = useState("");
   const [filterYear, setFilterYear] = useState("");
   const [hoveredObligation, setHoveredObligation] = useState(null);
-  const [activeTab, setActiveTab] = useState("Cyclic");
+  const [activeTab, setActiveTab] = useState("todo");
+
+  // Event tab filters
+  const [eventSearchTerm, setEventSearchTerm] = useState("");
+  const [eventFilterDomain, setEventFilterDomain] = useState("all");
 
   // Sorting states
   const [sortField, setSortField] = useState(null);
@@ -53,17 +54,14 @@ const ComplianceRegister = () => {
     manual_upload_required: false,
     mandatory: false,
     compliance_weight: 1,
-    current_status: "In Progress",
+    current_status: "Open",
     region: userRegion || "",
     calculated_due_date: "",
     obligation_type: "Cyclic",
   });
 
-  // Event template options
   const [eventTemplates, setEventTemplates] = useState([]);
   const [selectedTemplate, setSelectedTemplate] = useState(null);
-  
-  // Obligation name options for dropdown (from event_obligations table for auto-fill)
   const [obligationNameOptions, setObligationNameOptions] = useState([]);
   const [filteredNameOptions, setFilteredNameOptions] = useState([]);
   const [nameSearchTerm, setNameSearchTerm] = useState("");
@@ -101,11 +99,14 @@ const ComplianceRegister = () => {
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteError, setDeleteError] = useState("");
 
-  // Policies state for dropdown
   const [policies, setPolicies] = useState([]);
-
-  // Store event obligations data for autofill
   const [eventObligationsData, setEventObligationsData] = useState([]);
+  
+  // State for available event obligations (all event obligations from event_obligations table)
+  const [allEventObligations, setAllEventObligations] = useState([]);
+
+  // State for expanded obligation names in table
+  const [expandedObligationId, setExpandedObligationId] = useState(null);
 
   // Month and Year options
   const months = [
@@ -155,6 +156,7 @@ const ComplianceRegister = () => {
     fetchPolicies();
     fetchEventTemplates();
     fetchObligationNameOptions();
+    fetchAllEventObligations();
   }, []);
 
   // Click outside handler for name dropdown
@@ -176,7 +178,6 @@ const ComplianceRegister = () => {
     };
   }, []);
 
-  // FIXED: Get region ID from region name (not code)
   const getRegionId = async (regionName) => {
     if (!regionName) return null;
     try {
@@ -197,21 +198,127 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Fetch all obligations with their progress for the user's region
+  // Fetch all event obligations (all from event_obligations table)
+  const fetchAllEventObligations = async () => {
+    try {
+      const { data: eventObligations, error: eventError } = await supabase
+        .from('event_obligations')
+        .select('*')
+        .order('name');
+
+      if (eventError) throw eventError;
+
+      setAllEventObligations(eventObligations || []);
+    } catch (error) {
+      console.error('Error fetching all event obligations:', error);
+    }
+  };
+
+  // Generate occurrences for an obligation across multiple months - FIXED for month filtering
+  const generateOccurrencesForObligation = (obligation, monthsToGenerate = 24) => {
+    const occurrences = [];
+    const currentDate = new Date();
+    const dueDate = obligation.calculated_due_date ? new Date(obligation.calculated_due_date) : new Date();
+    const dueDay = dueDate.getDate();
+    
+    let monthIncrement = 1;
+    if (obligation.frequency === 'Quarterly') monthIncrement = 3;
+    else if (obligation.frequency === 'Bi-Annual') monthIncrement = 6;
+    else if (obligation.frequency === 'Annual' || obligation.frequency === 'Yearly') monthIncrement = 12;
+    else if (obligation.frequency === 'Monthly') monthIncrement = 1;
+    else {
+      // For event-based or non-cyclic, only generate one occurrence
+      const monthStr = String(dueDate.getMonth() + 1).padStart(2, "0");
+      const yearStr = dueDate.getFullYear().toString();
+      
+      // Check if this occurrence matches the month/year filter
+      if (filterMonth && filterMonth !== monthStr) return [];
+      if (filterYear && filterYear !== yearStr) return [];
+      
+      return [{
+        ...obligation,
+        instance_date: dueDate.toISOString().split('T')[0],
+        calculated_due_date: dueDate.toISOString().split('T')[0],
+        month: monthStr,
+        year: yearStr,
+        occurrence_status: obligation.current_status || 'Open'
+      }];
+    }
+
+    // Generate occurrences for each month
+    for (let i = 0; i < monthsToGenerate; i++) {
+      const occurrenceDate = new Date(
+        currentDate.getFullYear(),
+        currentDate.getMonth() - (monthsToGenerate - 1 - i),
+        1
+      );
+      
+      // Adjust if we're before the due date
+      if (occurrenceDate < dueDate && i === 0) {
+        occurrenceDate.setFullYear(dueDate.getFullYear());
+        occurrenceDate.setMonth(dueDate.getMonth());
+      }
+
+      const lastDayOfMonth = new Date(
+        occurrenceDate.getFullYear(),
+        occurrenceDate.getMonth() + 1,
+        0
+      ).getDate();
+      
+      const effectiveDay = Math.min(dueDay, lastDayOfMonth);
+      const dueDateForOccurrence = new Date(
+        occurrenceDate.getFullYear(),
+        occurrenceDate.getMonth(),
+        effectiveDay
+      );
+
+      // Check if we should include this occurrence based on due date month
+      const monthStr = String(occurrenceDate.getMonth() + 1).padStart(2, "0");
+      const yearStr = occurrenceDate.getFullYear().toString();
+      
+      // Skip if we're filtering by month/year and this doesn't match the due date month/year
+      if (filterMonth && filterMonth !== monthStr) continue;
+      if (filterYear && filterYear !== yearStr) continue;
+
+      occurrences.push({
+        ...obligation,
+        instance_date: new Date(occurrenceDate.getFullYear(), occurrenceDate.getMonth(), 1).toISOString().split('T')[0],
+        calculated_due_date: dueDateForOccurrence.toISOString().split('T')[0],
+        month: monthStr,
+        year: yearStr,
+        occurrence_status: obligation.current_status || 'Open'
+      });
+    }
+
+    return occurrences;
+  };
+
+  // Fetch all obligations with their status from obligation_occurrences
   const fetchObligations = async () => {
     setLoading(true);
     try {
       let userRegionId = null;
       if (!isAdmin && userRegion) {
         userRegionId = await getRegionId(userRegion);
-        console.log('User region name:', userRegion);
-        console.log('User region ID:', userRegionId);
       }
+
+      const currentDate = new Date();
 
       let query = supabase
         .from("obligations")
         .select(`
           *,
+          policy:policies(*),
+          obligation_occurrences!left(
+            id,
+            status,
+            instance_date,
+            due_date,
+            completed_at,
+            started_at,
+            comments,
+            region_id
+          ),
           obligation_progress!left(
             id,
             status,
@@ -229,43 +336,90 @@ const ComplianceRegister = () => {
       if (!error && data) {
         const processedData = data
           .map(obligation => {
-            // For regional users, only show obligations with progress for their region
+            let occurrences = [];
+            let progressRecords = [];
+            
             if (!isAdmin && userRegionId) {
-              const progressForRegion = obligation.obligation_progress?.find(
+              occurrences = obligation.obligation_occurrences?.filter(
+                o => o.region_id === userRegionId
+              ) || [];
+              progressRecords = obligation.obligation_progress?.filter(
                 p => p.region_id === userRegionId
-              );
-              
-              // If no progress for this region, skip this obligation
-              if (!progressForRegion) return null;
-              
+              ) || [];
+            } else if (isAdmin) {
+              occurrences = obligation.obligation_occurrences || [];
+              progressRecords = obligation.obligation_progress || [];
+            }
+
+            const currentOccurrence = occurrences.find(o => {
+              if (!o.instance_date) return false;
+              const instDate = new Date(o.instance_date);
+              return instDate.getFullYear() === currentDate.getFullYear() && 
+                     instDate.getMonth() === currentDate.getMonth();
+            });
+
+            const latestOccurrence = occurrences.length > 0 
+              ? [...occurrences].sort((a, b) => new Date(b.instance_date) - new Date(a.instance_date))[0]
+              : null;
+
+            const latestProgress = progressRecords.length > 0
+              ? [...progressRecords].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0]
+              : null;
+
+            let status = 'Open';
+            
+            if (currentOccurrence) {
+              status = currentOccurrence.status || 'Open';
+            } else if (latestOccurrence) {
+              status = latestOccurrence.status || 'Open';
+            } else if (latestProgress) {
+              const progressStatus = latestProgress.status;
+              if (progressStatus === 'Completed') {
+                status = 'Closed';
+              } else if (progressStatus === 'In Progress' || progressStatus === 'Pending' || progressStatus === 'Submitted') {
+                status = 'Submitted/Under Review';
+              } else if (progressStatus === 'Open' || progressStatus === 'Not Started') {
+                status = 'Open';
+              } else {
+                status = progressStatus || 'Open';
+              }
+            } else if (obligation.current_status) {
+              status = obligation.current_status;
+            }
+
+            if (isAdmin && !currentOccurrence && occurrences.length === 0 && !latestProgress) {
               return {
                 ...obligation,
-                current_status: progressForRegion.status,
-                progress_id: progressForRegion.id || null,
-                progress_status: progressForRegion.status || null,
-                completed_at: progressForRegion.completed_at || null,
-                started_at: progressForRegion.started_at || null,
-                last_updated_at: progressForRegion.last_updated_at || null,
-                progress_comments: progressForRegion.comments || null,
-                user_region_id: userRegionId,
-                has_progress: true,
+                current_status: obligation.current_status || 'Open',
+                progress_id: null,
+                progress_status: null,
+                has_progress: false,
+                occurrences: [],
+                current_occurrence: null,
               };
             }
 
-            // For admin, use progress status if available, otherwise use obligation status
-            const progress = obligation.obligation_progress?.[0] || null;
-            const status = progress?.status || obligation.current_status || 'Not Started';
-            
+            if (!isAdmin && userRegionId && occurrences.length === 0 && progressRecords.length === 0) {
+              return null;
+            }
+
+            const dueDate = currentOccurrence?.due_date || 
+                            latestOccurrence?.due_date || 
+                            obligation.calculated_due_date;
+
             return {
               ...obligation,
               current_status: status,
-              progress_id: progress?.id || null,
-              progress_status: progress?.status || null,
-              completed_at: progress?.completed_at || null,
-              started_at: progress?.started_at || null,
-              last_updated_at: progress?.last_updated_at || null,
-              progress_comments: progress?.comments || null,
-              has_progress: !!progress,
+              progress_id: currentOccurrence?.id || latestProgress?.id || null,
+              progress_status: currentOccurrence?.status || latestProgress?.status || null,
+              completed_at: currentOccurrence?.completed_at || latestProgress?.completed_at || null,
+              started_at: currentOccurrence?.started_at || latestProgress?.started_at || null,
+              last_updated_at: currentOccurrence?.updated_at || latestProgress?.updated_at || null,
+              progress_comments: currentOccurrence?.comments || latestProgress?.comments || null,
+              has_progress: !!(currentOccurrence || latestProgress),
+              occurrences: occurrences,
+              current_occurrence: currentOccurrence,
+              calculated_due_date: dueDate,
             };
           })
           .filter(obligation => obligation !== null);
@@ -280,10 +434,109 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Function to update obligation status directly in progress table
+  // Function to add an event obligation to the to do tab
+  const handleAddEventObligation = async (eventObligation) => {
+    try {
+      setAddLoading(true);
+      
+      const regionId = await getRegionId(userRegion || eventObligation.region);
+      
+      let obligationId = eventObligation.obligation_id;
+      if (!obligationId) {
+        const existingIds = obligations
+          .map((o) => o.obligation_id)
+          .filter((id) => id && id.startsWith("MS-"))
+          .map((id) => parseInt(id.replace("MS-", "")))
+          .filter((num) => !isNaN(num));
+        const maxId = existingIds.length > 0 ? Math.max(...existingIds) : 0;
+        const nextId = maxId + 1;
+        obligationId = `MS-${String(nextId).padStart(3, "0")}`;
+      }
+
+      const { data: existing, error: checkError } = await supabase
+        .from("obligations")
+        .select("obligation_id")
+        .eq("obligation_id", obligationId)
+        .single();
+
+      if (existing) {
+        toast.warning(`Obligation ${obligationId} already exists.`);
+        setAddLoading(false);
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from("obligations")
+        .insert({
+          obligation_id: obligationId,
+          policy_id: eventObligation.policy_id || null,
+          clause: eventObligation.clause || "",
+          domain: eventObligation.domain || "",
+          name: eventObligation.name || "",
+          description: eventObligation.description || "",
+          responsible: eventObligation.responsible || "",
+          accountable: eventObligation.accountable || "",
+          frequency: eventObligation.frequency || "Event Based",
+          due_date_rule: eventObligation.due_date_rule || "",
+          evidence_required: eventObligation.evidence_required || false,
+          evidence_type: eventObligation.evidence_type || "",
+          source_system: eventObligation.source_system || "",
+          portal_action: eventObligation.portal_action || "Upload",
+          manual_upload_required: eventObligation.manual_upload_required || false,
+          mandatory: eventObligation.mandatory || false,
+          compliance_weight: parseInt(eventObligation.compliance_weight) || 1,
+          current_status: 'Open',
+          region: eventObligation.region || userRegion || "",
+          calculated_due_date: eventObligation.calculated_due_date || null,
+          obligation_type: "Event",
+        })
+        .select();
+
+      if (error) throw error;
+
+      if (regionId && data && data[0]) {
+        await supabase
+          .from('obligation_progress')
+          .insert({
+            obligation_id: data[0].id,
+            region_id: regionId,
+            status: 'Not Started',
+          });
+      }
+
+      if (regionId && data && data[0]) {
+        const currentDate = new Date();
+        const dueDate = eventObligation.calculated_due_date || 
+                       new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
+        
+        await supabase
+          .from('obligation_occurrences')
+          .insert({
+            obligation_id: data[0].id,
+            region_id: regionId,
+            instance_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
+            due_date: dueDate,
+            status: 'Open',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          });
+      }
+
+      toast.success(`Event obligation "${eventObligation.name}" added successfully!`);
+      
+      await fetchObligations();
+      
+    } catch (error) {
+      console.error("Error adding event obligation:", error);
+      toast.error(`❌ ${error.message || "Failed to add event obligation."}`);
+    } finally {
+      setAddLoading(false);
+    }
+  };
+
+  // Function to update obligation status in obligation_occurrences
   const updateObligationStatus = async (obligationId, status, comment = '') => {
     try {
-      // Get the region ID for the user
       const regionId = await getRegionId(userRegion);
       
       if (!regionId && !isAdmin) {
@@ -291,67 +544,48 @@ const ComplianceRegister = () => {
         return false;
       }
 
-      // For regional users, only allow valid statuses
-      let progressStatus = status;
-      if (!isAdmin && status !== 'Completed' && status !== 'In Progress' && status !== 'Overdue') {
-        progressStatus = 'In Progress';
-      }
-
-      // Check if progress record exists
-      const { data: existingProgress, error: checkError } = await supabase
-        .from('obligation_progress')
+      const currentDate = new Date();
+      const { data: occurrence, error: occurrenceError } = await supabase
+        .from('obligation_occurrences')
         .select('id')
         .eq('obligation_id', obligationId)
         .eq('region_id', regionId)
+        .gte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0])
+        .lte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0])
         .single();
 
-      let updateData = {
-        status: progressStatus,
-        last_updated_at: new Date().toISOString(),
-      };
-
-      // Add timestamps based on status
-      if (progressStatus === 'Completed') {
-        updateData.completed_at = new Date().toISOString();
-      } else if (progressStatus === 'In Progress' && !existingProgress?.started_at) {
-        updateData.started_at = new Date().toISOString();
+      if (occurrenceError && occurrenceError.code !== 'PGRST116') {
+        console.error('Error finding occurrence:', occurrenceError);
+        toast.error('No occurrence found for this month.');
+        return false;
       }
 
-      if (comment) {
-        updateData.comments = comment;
+      if (!occurrence) {
+        toast.error('No occurrence found for this month.');
+        return false;
       }
 
-      let result;
-      if (existingProgress) {
-        // Update existing progress
-        result = await supabase
-          .from('obligation_progress')
-          .update(updateData)
-          .eq('id', existingProgress.id);
-      } else {
-        // Insert new progress record
-        result = await supabase
-          .from('obligation_progress')
-          .insert({
-            obligation_id: obligationId,
-            region_id: regionId,
-            status: progressStatus,
-            ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
-            ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
-            ...(comment && { comments: comment }),
-          });
-      }
-
-      if (result.error) throw result.error;
-
-      // Also update the main obligations table for backward compatibility
-      await supabase
-        .from('obligations')
+      const { error: updateError } = await supabase
+        .from('obligation_occurrences')
         .update({
-          current_status: progressStatus,
+          status: status,
+          updated_at: new Date().toISOString(),
+          ...(status === 'Closed' && { completed_at: new Date().toISOString() }),
+          ...(status === 'Submitted/Under Review' && { started_at: new Date().toISOString() }),
+          ...(comment && { comments: comment }),
+        })
+        .eq('id', occurrence.id);
+
+      if (updateError) throw updateError;
+
+      await supabase
+        .from('obligation_progress')
+        .update({
+          current_status: status === 'Closed' ? 'Completed' : status === 'Submitted/Under Review' ? 'In Progress' : 'Not Started',
           updated_at: new Date().toISOString()
         })
-        .eq('id', obligationId);
+        .eq('obligation_id', obligationId)
+        .eq('region_id', regionId);
 
       return true;
     } catch (error) {
@@ -406,14 +640,12 @@ const ComplianceRegister = () => {
     }
   };
 
+  // Updated status badge for new status system
   const getStatusBadge = (status) => {
     const badges = {
-      Completed: "bg-green-100 text-green-800",
-      "In Progress": "bg-blue-100 text-blue-800",
-      Pending: "bg-yellow-100 text-yellow-800",
-      Overdue: "bg-red-100 text-red-800",
-      "Due Today": "bg-orange-100 text-orange-800",
-      "Not Started": "bg-gray-100 text-gray-800",
+      'Open': "bg-gray-100 text-gray-800",
+      'Submitted/Under Review': "bg-yellow-100 text-yellow-800",
+      'Closed': "bg-green-100 text-green-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
   };
@@ -433,6 +665,11 @@ const ComplianceRegister = () => {
 
   const getDomains = () => {
     const domains = new Set(obligations.map((o) => o.domain));
+    return ["all", ...domains];
+  };
+
+  const getEventDomains = () => {
+    const domains = new Set(allEventObligations.map((o) => o.domain));
     return ["all", ...domains];
   };
 
@@ -544,7 +781,7 @@ const ComplianceRegister = () => {
       manual_upload_required: false,
       mandatory: false,
       compliance_weight: 1,
-      current_status: "In Progress",
+      current_status: "Open",
       region: userRegion || "",
       calculated_due_date: "",
       obligation_type: type,
@@ -628,7 +865,6 @@ const ComplianceRegister = () => {
         obligationId = generateObligationId();
       }
 
-      // Check for existing obligation_id in obligations table
       const { data: existing, error: checkError } = await supabase
         .from("obligations")
         .select("obligation_id")
@@ -644,10 +880,8 @@ const ComplianceRegister = () => {
         return;
       }
 
-      // Get region ID
       const regionId = await getRegionId(addFormData.region || userRegion);
 
-      // Insert into obligations table
       const { data, error } = await supabase
         .from("obligations")
         .insert({
@@ -668,7 +902,7 @@ const ComplianceRegister = () => {
           manual_upload_required: addFormData.manual_upload_required,
           mandatory: addFormData.mandatory,
           compliance_weight: parseInt(addFormData.compliance_weight),
-          current_status: addFormData.current_status,
+          current_status: 'Open',
           region: addFormData.region || userRegion,
           calculated_due_date: addFormData.calculated_due_date || null,
           obligation_type: addFormData.obligation_type,
@@ -677,20 +911,30 @@ const ComplianceRegister = () => {
 
       if (error) throw error;
 
-      // Insert into obligation_progress for the user's region
       if (regionId && data && data[0]) {
-        // For regional users, validate status
-        let progressStatus = addFormData.current_status;
-        if (!isAdmin && progressStatus !== 'Completed' && progressStatus !== 'In Progress' && progressStatus !== 'Overdue') {
-          progressStatus = 'In Progress';
-        }
-
         await supabase
           .from('obligation_progress')
           .insert({
             obligation_id: data[0].id,
             region_id: regionId,
-            status: progressStatus,
+            status: 'Not Started',
+          });
+      }
+
+      if (addFormData.obligation_type === "Event" && regionId && data && data[0]) {
+        const currentDate = new Date();
+        const dueDate = addFormData.calculated_due_date || new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
+        
+        await supabase
+          .from('obligation_occurrences')
+          .insert({
+            obligation_id: data[0].id,
+            region_id: regionId,
+            instance_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
+            due_date: dueDate,
+            status: 'Open',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
           });
       }
 
@@ -716,7 +960,7 @@ const ComplianceRegister = () => {
         manual_upload_required: false,
         mandatory: false,
         compliance_weight: 1,
-        current_status: "In Progress",
+        current_status: "Open",
         region: userRegion || "",
         calculated_due_date: "",
         obligation_type: "Cyclic",
@@ -727,6 +971,7 @@ const ComplianceRegister = () => {
       
       await fetchObligations();
       await fetchObligationNameOptions();
+      await fetchAllEventObligations();
       
     } catch (error) {
       console.error("Error creating obligation:", error);
@@ -755,7 +1000,7 @@ const ComplianceRegister = () => {
       manual_upload_required: obligation.manual_upload_required || false,
       mandatory: obligation.mandatory || false,
       compliance_weight: obligation.compliance_weight || 1,
-      current_status: obligation.current_status || "In Progress",
+      current_status: obligation.current_status || "Open",
       obligation_type: obligation.obligation_type || "Cyclic",
     });
     setEditError("");
@@ -802,43 +1047,29 @@ const ComplianceRegister = () => {
 
       if (error) throw error;
 
-      // Update obligation_progress if user is regional
       if (!isAdmin && userRegion) {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
-          // Validate status for regional users
-          let progressStatus = editFormData.current_status;
-          if (progressStatus !== 'Completed' && progressStatus !== 'In Progress' && progressStatus !== 'Overdue') {
-            progressStatus = 'In Progress';
-          }
-
-          const { data: existingProgress } = await supabase
-            .from('obligation_progress')
+          const currentDate = new Date();
+          const { data: occurrence } = await supabase
+            .from('obligation_occurrences')
             .select('id')
             .eq('obligation_id', editingObligation.id)
             .eq('region_id', regionId)
+            .gte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0])
+            .lte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0])
             .single();
 
-          if (existingProgress) {
+          if (occurrence) {
             await supabase
-              .from('obligation_progress')
+              .from('obligation_occurrences')
               .update({
-                status: progressStatus,
-                last_updated_at: new Date().toISOString(),
-                ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
-                ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
+                status: editFormData.current_status,
+                updated_at: new Date().toISOString(),
+                ...(editFormData.current_status === 'Closed' && { completed_at: new Date().toISOString() }),
+                ...(editFormData.current_status === 'Submitted/Under Review' && { started_at: new Date().toISOString() }),
               })
-              .eq('id', existingProgress.id);
-          } else {
-            await supabase
-              .from('obligation_progress')
-              .insert({
-                obligation_id: editingObligation.id,
-                region_id: regionId,
-                status: progressStatus,
-                ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
-                ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
-              });
+              .eq('id', occurrence.id);
           }
         }
       }
@@ -871,13 +1102,16 @@ const ComplianceRegister = () => {
     try {
       const obligationId = deletingObligation.obligation_id;
       
-      // Delete from obligation_progress
+      await supabase
+        .from('obligation_occurrences')
+        .delete()
+        .eq('obligation_id', deletingObligation.id);
+
       await supabase
         .from('obligation_progress')
         .delete()
         .eq('obligation_id', deletingObligation.id);
 
-      // Delete from obligations
       const { error: deleteError } = await supabase
         .from("obligations")
         .delete()
@@ -887,6 +1121,7 @@ const ComplianceRegister = () => {
 
       await fetchObligations();
       await fetchObligationNameOptions();
+      await fetchAllEventObligations();
       setShowDeleteModal(false);
       setDeletingObligation(null);
       setDeleteLoading(false);
@@ -914,19 +1149,20 @@ const ComplianceRegister = () => {
     toast.info("Filters cleared");
   };
 
-  // Handle sort
+  const clearEventFilters = () => {
+    setEventSearchTerm("");
+    setEventFilterDomain("all");
+  };
+
   const handleSort = (field) => {
     if (sortField === field) {
-      // Toggle direction if same field
       setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
-      // New field, set to ascending
       setSortField(field);
       setSortDirection('asc');
     }
   };
 
-  // Get sort icon
   const getSortIcon = (field) => {
     if (sortField !== field) {
       return (
@@ -946,96 +1182,118 @@ const ComplianceRegister = () => {
     );
   };
 
-  // Filter and sort obligations
+  // Toggle obligation name expansion
+  const toggleObligationName = (id) => {
+    setExpandedObligationId(expandedObligationId === id ? null : id);
+  };
+
+  // Get filtered and sorted obligations with occurrences for all months
   const getFilteredAndSortedObligations = () => {
     let filtered = obligations;
 
-    if (activeTab === "Cyclic") {
-      filtered = filtered.filter(o => o.obligation_type === "Cyclic");
-    } else if (activeTab === "Event") {
+    if (activeTab === "todo") {
+      // Show both Cyclic and Event based obligations
+      filtered = filtered.filter(o => o.obligation_type === "Cyclic" || o.obligation_type === "Event");
+    } else if (activeTab === "eventlist") {
       filtered = filtered.filter(o => o.obligation_type === "Event");
     }
 
-    // Apply filters
-    filtered = filtered.filter((obligation) => {
-      const matchesSearch =
-        obligation.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        obligation.description
-          ?.toLowerCase()
-          .includes(searchTerm.toLowerCase()) ||
-        obligation.obligation_id
-          ?.toLowerCase()
-          .includes(searchTerm.toLowerCase());
+    // Generate occurrences for each obligation based on month/year filter
+    const allOccurrences = [];
+    filtered.forEach(obligation => {
+      // If month/year filter is applied, only generate occurrences for that month/year
+      const occurrences = generateOccurrencesForObligation(obligation, 24);
+      allOccurrences.push(...occurrences);
+    });
+    
+    // If there are no filtered occurrences, return empty array
+    if (allOccurrences.length === 0 && (filterMonth || filterYear)) {
+      return [];
+    }
+    
+    // If no month/year filter, use all occurrences
+    if (!filterMonth && !filterYear) {
+      filtered = allOccurrences;
+    } else {
+      // Use the filtered occurrences
+      filtered = allOccurrences;
+    }
 
-      const matchesStatus =
-        filterStatus === "all" || obligation.current_status === filterStatus;
-      const matchesFrequency =
-        filterFrequency === "all" || obligation.frequency === filterFrequency;
-      const matchesDomain =
-        filterDomain === "all" || obligation.domain === filterDomain;
+    // Apply additional filters
+    filtered = filtered.filter((item) => {
+      const name = item.name || '';
+      const description = item.description || '';
+      const obligationId = item.obligation_id || '';
+      
+      const matchesSearch = searchTerm === "" ||
+        name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        obligationId.toLowerCase().includes(searchTerm.toLowerCase());
 
-      // Month/Year filter on calculated_due_date
-      let matchesMonth = true;
-      if (filterMonth && filterYear && obligation.calculated_due_date) {
-        const dueDate = new Date(obligation.calculated_due_date);
-        const dueMonth = String(dueDate.getMonth() + 1).padStart(2, "0");
-        const dueYear = dueDate.getFullYear().toString();
-        matchesMonth = dueMonth === filterMonth && dueYear === filterYear;
-      } else if (filterMonth && obligation.calculated_due_date) {
-        const dueDate = new Date(obligation.calculated_due_date);
-        const dueMonth = String(dueDate.getMonth() + 1).padStart(2, "0");
-        matchesMonth = dueMonth === filterMonth;
-      } else if (filterYear && obligation.calculated_due_date) {
-        const dueDate = new Date(obligation.calculated_due_date);
-        const dueYear = dueDate.getFullYear().toString();
-        matchesMonth = dueYear === filterYear;
-      }
+      const matchesStatus = filterStatus === "all" || item.current_status === filterStatus || item.occurrence_status === filterStatus;
+      const matchesFrequency = filterFrequency === "all" || item.frequency === filterFrequency;
+      const matchesDomain = filterDomain === "all" || item.domain === filterDomain;
 
-      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain && matchesMonth;
+      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
     });
 
-    // Apply sorting
-    if (sortField) {
+    // Sort by due date if sorting is enabled
+    if (sortField === 'dueDate') {
       filtered.sort((a, b) => {
-        let aVal, bVal;
-        
-        if (sortField === 'dueDate') {
-          aVal = a.calculated_due_date ? new Date(a.calculated_due_date).getTime() : Infinity;
-          bVal = b.calculated_due_date ? new Date(b.calculated_due_date).getTime() : Infinity;
-        } else if (sortField === 'status') {
-          // Status priority order: Completed, In Progress, Pending, Due Today, Not Started, Overdue
-          const statusOrder = {
-            'Completed': 1,
-            'In Progress': 2,
-            'Pending': 3,
-            'Due Today': 4,
-            'Not Started': 5,
-            'Overdue': 6
-          };
-          aVal = statusOrder[a.current_status] || 999;
-          bVal = statusOrder[b.current_status] || 999;
-        } else {
-          aVal = a[sortField] || '';
-          bVal = b[sortField] || '';
-        }
-
-        if (aVal < bVal) return sortDirection === 'asc' ? -1 : 1;
-        if (aVal > bVal) return sortDirection === 'asc' ? 1 : -1;
-        return 0;
+        const dateA = a.calculated_due_date ? new Date(a.calculated_due_date) : new Date(0);
+        const dateB = b.calculated_due_date ? new Date(b.calculated_due_date) : new Date(0);
+        return sortDirection === 'asc' ? dateA - dateB : dateB - dateA;
+      });
+    } else if (sortField === 'status') {
+      const statusOrder = {
+        'Closed': 1,
+        'Submitted/Under Review': 2,
+        'Open': 3,
+      };
+      filtered.sort((a, b) => {
+        const aStatus = a.current_status || a.occurrence_status || 'Open';
+        const bStatus = b.current_status || b.occurrence_status || 'Open';
+        const aVal = statusOrder[aStatus] || 999;
+        const bVal = statusOrder[bStatus] || 999;
+        return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
       });
     }
 
     return filtered;
   };
 
-  const filteredObligations = getFilteredAndSortedObligations();
+  const getFilteredEventObligations = () => {
+    let filtered = allEventObligations;
 
-  const getCyclicCount = () => {
-    return obligations.filter(o => o.obligation_type === "Cyclic").length;
+    if (eventSearchTerm) {
+      const term = eventSearchTerm.toLowerCase();
+      filtered = filtered.filter(event => 
+        event.name?.toLowerCase().includes(term) ||
+        event.obligation_id?.toLowerCase().includes(term) ||
+        event.description?.toLowerCase().includes(term)
+      );
+    }
+
+    if (eventFilterDomain !== "all") {
+      filtered = filtered.filter(event => event.domain === eventFilterDomain);
+    }
+
+    return filtered;
+  };
+
+  const filteredObligations = getFilteredAndSortedObligations();
+  const filteredEventObligations = getFilteredEventObligations();
+
+  const getTodoCount = () => {
+    // Count unique obligations (not occurrences) in the To Do tab
+    // Get all obligations that are Cyclic or Event type
+    const todoObligations = obligations.filter(o => o.obligation_type === "Cyclic" || o.obligation_type === "Event");
+    // Return the count of unique obligations
+    return todoObligations.length;
   };
 
   const getEventCount = () => {
-    return obligations.filter(o => o.obligation_type === "Event").length;
+    return allEventObligations.length;
   };
 
   const updateUrlParams = () => {
@@ -1050,6 +1308,161 @@ const ComplianceRegister = () => {
       params.set('year', filterYear);
     }
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+  };
+
+  // Render tooltip for obligation details
+  const renderTooltip = (obligation, dueDateColor, dueDate) => {
+    const status = obligation.current_status || obligation.occurrence_status || 'Open';
+    return (
+      <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
+        <div className="space-y-1.5">
+          <div className="flex justify-between items-start">
+            <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
+            <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(status)}`}>
+              {status}
+            </span>
+          </div>
+          <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
+          <div className="grid grid-cols-2 gap-1 text-[10px]">
+            <div>
+              <span className="font-medium text-gray-500">ID:</span>
+              <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Type:</span>
+              <span className="ml-1 text-gray-700">{obligation.obligation_type}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Domain:</span>
+              <span className="ml-1 text-gray-700">{obligation.domain}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Freq:</span>
+              <span className="ml-1 text-gray-700">{obligation.frequency}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Due:</span>
+              <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
+            </div>
+            {obligation.month && obligation.year && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Instance:</span>
+                <span className="ml-1 text-gray-700">{obligation.month}/{obligation.year}</span>
+              </div>
+            )}
+            <div>
+              <span className="font-medium text-gray-500">Responsible:</span>
+              <span className="ml-1 text-gray-700">{obligation.responsible}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Accountable:</span>
+              <span className="ml-1 text-gray-700">{obligation.accountable}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Weight:</span>
+              <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Clause:</span>
+              <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Region:</span>
+              <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
+            </div>
+            {obligation.evidence_required && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Evidence:</span>
+                <span className="ml-1 text-gray-700">{obligation.evidence_type || 'Required'}</span>
+              </div>
+            )}
+            {obligation.mandatory && (
+              <div className="col-span-2">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
+                  Mandatory
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Render tooltip for event obligations
+  const renderEventTooltip = (event) => {
+    return (
+      <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
+        <div className="space-y-1.5">
+          <div className="flex justify-between items-start">
+            <h4 className="text-xs font-semibold text-gray-900 break-words">{event.name}</h4>
+            <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-orange-100 text-orange-800">
+              Event
+            </span>
+          </div>
+          <p className="text-xs text-gray-600 break-words">{event.description || 'No description'}</p>
+          <div className="grid grid-cols-2 gap-1 text-[10px]">
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">ID:</span>
+              <span className="ml-1 text-gray-700">{event.obligation_id || 'N/A'}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Domain:</span>
+              <span className="ml-1 text-gray-700">{event.domain || 'N/A'}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Frequency:</span>
+              <span className="ml-1 text-gray-700">{event.frequency || 'Event Based'}</span>
+            </div>
+            <div>
+              <span className="font-medium text-gray-500">Weight:</span>
+              <span className="ml-1 text-gray-700">{event.compliance_weight || 1}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Responsible:</span>
+              <span className="ml-1 text-gray-700">{event.responsible || 'N/A'}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Accountable:</span>
+              <span className="ml-1 text-gray-700">{event.accountable || 'N/A'}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Clause:</span>
+              <span className="ml-1 text-gray-700">{event.clause || 'N/A'}</span>
+            </div>
+            <div className="col-span-2">
+              <span className="font-medium text-gray-500">Region:</span>
+              <span className="ml-1 text-gray-700">{event.region || 'N/A'}</span>
+            </div>
+            {event.evidence_required && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Evidence:</span>
+                <span className="ml-1 text-gray-700">{event.evidence_type || 'Required'}</span>
+              </div>
+            )}
+            {event.mandatory && (
+              <div className="col-span-2">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
+                  Mandatory
+                </span>
+              </div>
+            )}
+            {event.due_date_rule && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Due Date Rule:</span>
+                <span className="ml-1 text-gray-700">{event.due_date_rule}</span>
+              </div>
+            )}
+            {event.calculated_due_date && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Calculated Due Date:</span>
+                <span className="ml-1 text-gray-700">{formatDate(event.calculated_due_date)}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
@@ -1071,7 +1484,10 @@ const ComplianceRegister = () => {
             Compliance Register
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            {filteredObligations.length} obligations found
+            {activeTab === "todo" 
+              ? `${filteredObligations.length} obligations found`
+              : `${filteredEventObligations.length} event obligations available`
+            }
             {!isAdmin && userRegion && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
@@ -1086,7 +1502,7 @@ const ComplianceRegister = () => {
                 </span>
               </span>
             )}
-            {filterStatus !== "all" && activeTab === "Cyclic" && (
+            {filterStatus !== "all" && activeTab === "todo" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
                   Filtered by: {filterStatus}
@@ -1099,7 +1515,7 @@ const ComplianceRegister = () => {
                 </button>
               </span>
             )}
-            {(filterMonth || filterYear) && (
+            {(filterMonth || filterYear) && activeTab === "todo" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-full">
                   {filterMonth && months.find(m => m.value === filterMonth)?.label} {filterYear}
@@ -1116,7 +1532,7 @@ const ComplianceRegister = () => {
                 </button>
               </span>
             )}
-            {sortField && (
+            {sortField && activeTab === "todo" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
                   Sorted by: {sortField === 'dueDate' ? 'Due Date' : 'Status'} ({sortDirection === 'asc' ? '↑' : '↓'})
@@ -1126,6 +1542,19 @@ const ComplianceRegister = () => {
                     setSortField(null);
                     setSortDirection('asc');
                   }}
+                  className="ml-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
+            {(eventSearchTerm || eventFilterDomain !== "all") && activeTab === "eventlist" && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                  Filters applied
+                </span>
+                <button
+                  onClick={clearEventFilters}
                   className="ml-1 text-xs text-gray-500 hover:text-gray-700"
                 >
                   ✕
@@ -1186,27 +1615,27 @@ const ComplianceRegister = () => {
       <div className="border-b border-gray-200 overflow-x-auto">
         <nav className="-mb-px flex space-x-4 sm:space-x-6 min-w-max">
           <button
-            onClick={() => setActiveTab("Cyclic")}
+            onClick={() => setActiveTab("todo")}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-              activeTab === "Cyclic"
+              activeTab === "todo"
                 ? "border-[#8cc63e] text-[#8cc63e]"
                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
             }`}
           >
-            Cyclic Based
+            To Do
             <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">
-              {getCyclicCount()}
+              {getTodoCount()}
             </span>
           </button>
           <button
-            onClick={() => setActiveTab("Event")}
+            onClick={() => setActiveTab("eventlist")}
             className={`py-2 px-1 border-b-2 font-medium text-sm transition-colors whitespace-nowrap ${
-              activeTab === "Event"
+              activeTab === "eventlist"
                 ? "border-orange-500 text-orange-600"
                 : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
             }`}
           >
-            Event Based
+            Event List
             <span className="ml-2 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-xs">
               {getEventCount()}
             </span>
@@ -1214,8 +1643,46 @@ const ComplianceRegister = () => {
         </nav>
       </div>
 
-      {/* Filters - Only show for Cyclic tab */}
-      {activeTab === "Cyclic" && (
+      {/* Event Tab Filters */}
+      {activeTab === "eventlist" && (
+        <div className="bg-white rounded-lg shadow p-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <input
+                type="text"
+                value={eventSearchTerm}
+                onChange={(e) => setEventSearchTerm(e.target.value)}
+                placeholder="Search by name, ID..."
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              />
+            </div>
+            <div>
+              <select
+                value={eventFilterDomain}
+                onChange={(e) => setEventFilterDomain(e.target.value)}
+                className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+              >
+                {getEventDomains().map((domain) => (
+                  <option key={domain} value={domain}>
+                    {domain === "all" ? "All Domains" : domain}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <button
+                onClick={clearEventFilters}
+                className="w-full px-3 py-2 bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200 transition-colors text-sm"
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Filters - Only show for To Do tab */}
+      {activeTab === "todo" && filteredObligations.length > 0 && (
         <div className="bg-white rounded-lg shadow p-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             <div>
@@ -1237,12 +1704,9 @@ const ComplianceRegister = () => {
                 className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
               >
                 <option value="all">All Statuses</option>
-                <option value="Not Started">Not Started</option>
-                <option value="Pending">Pending</option>
-                <option value="In Progress">In Progress</option>
-                <option value="Completed">Completed</option>
-                <option value="Overdue">Overdue</option>
-                <option value="Due Today">Due Today</option>
+                <option value="Open">Open</option>
+                <option value="Submitted/Under Review">Submitted/Under Review</option>
+                <option value="Closed">Closed</option>
               </select>
             </div>
             <div>
@@ -1309,220 +1773,281 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-                <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Obligation
-                </th>
-                <th className="hidden sm:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Domain
-                </th>
-                <th className="hidden md:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
-                  Freq
-                </th>
-                <th 
-                  className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
-                  onClick={() => handleSort('dueDate')}
-                >
-                  <div className="flex items-center">
-                    Due Date
-                    {getSortIcon('dueDate')}
-                  </div>
-                </th>
-                <th 
-                  className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
-                  onClick={() => handleSort('status')}
-                >
-                  <div className="flex items-center">
-                    Status
-                    {getSortIcon('status')}
-                  </div>
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredObligations.length === 0 ? (
+      {/* Event List Tab - Show ALL Event Obligations */}
+      {activeTab === "eventlist" && (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
                 <tr>
-                  <td colSpan="6" className="px-2 py-8 text-center text-gray-500 text-sm">
-                    {activeTab === "Event" 
-                      ? "No event obligations found. Click 'Add Event Based' to create one."
-                      : !isAdmin && userRegion 
-                        ? `No obligations found for region: ${userRegion}`
-                        : "No obligations found matching your filters."}
-                  </td>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Action
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider min-w-[150px]">
+                    Obligation Name
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Domain
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Frequency
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Description
+                  </th>
                 </tr>
-              ) : (
-                filteredObligations.map((obligation) => {
-                  const dueDate = obligation.calculated_due_date;
-                  const isOverdue = isDueDateOverdue(dueDate);
-                  const dueDateColor = getDueDateColor(dueDate);
-
-                  return (
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredEventObligations.length === 0 ? (
+                  <tr>
+                    <td colSpan="5" className="px-2 py-8 text-center text-gray-500 text-sm">
+                      {eventSearchTerm || eventFilterDomain !== "all" 
+                        ? "No event obligations match your filters."
+                        : "No event obligations available."}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredEventObligations.map((event) => (
                     <tr
-                      key={obligation.id}
+                      key={event.id}
                       className="hover:bg-gray-50 transition-colors relative"
-                      onMouseEnter={() => setHoveredObligation(obligation.id)}
+                      onMouseEnter={() => setHoveredObligation(event.id)}
                       onMouseLeave={() => setHoveredObligation(null)}
                     >
                       <td className="px-2 py-2 whitespace-nowrap">
-                        <div className="flex items-center space-x-1">
-                          <Link
-                            to={`/compliance/${obligation.obligation_id}`}
-                            className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
-                            title="View Details"
-                          >
-                            <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-                            </svg>
-                          </Link>
-                          {isAdmin && (
-                            <>
-                              <button
-                                onClick={() => handleEditClick(obligation)}
-                                className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-                                title="Edit"
-                              >
-                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                </svg>
-                              </button>
-                              <button
-                                onClick={() => handleDeleteClick(obligation)}
-                                className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-                                title="Delete"
-                              >
-                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                </svg>
-                              </button>
-                            </>
-                          )}
-                        </div>
+                        <button
+                          onClick={() => handleAddEventObligation(event)}
+                          disabled={addLoading}
+                          className="inline-flex items-center justify-center px-3 py-1 bg-[#ff0099] text-white text-xs rounded hover:bg-[#e40076] transition-colors disabled:opacity-50"
+                        >
+                          <svg className="h-3 w-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4" />
+                          </svg>
+                          Add
+                        </button>
                       </td>
-                      <td className="px-2 py-2 relative max-w-[100px] sm:max-w-[150px] md:max-w-[200px]">
-                        <div className="text-xs sm:text-sm font-medium text-gray-900 truncate">
-                          {obligation.name}
+                      <td className="px-2 py-2 relative max-w-[200px] sm:max-w-[250px] md:max-w-[300px]">
+                        <div 
+                          className="text-xs sm:text-sm font-medium text-gray-900 truncate cursor-pointer hover:text-[#8cc63e] transition-colors"
+                          onClick={() => toggleObligationName(event.id)}
+                          title={event.name}
+                        >
+                          {event.name}
                         </div>
-                        <div className="text-[10px] text-gray-500 truncate hidden sm:block">
-                          {obligation.description?.substring(0, 40)}...
+                        <div className="text-[10px] text-gray-500 truncate">
+                          ID: {event.obligation_id || 'N/A'}
                         </div>
-                        
-                        {/* Hover Tooltip */}
-                        {hoveredObligation === obligation.id && (
-                          <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
-                            <div className="space-y-1.5">
-                              <div className="flex justify-between items-start">
-                                <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
-                                <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(obligation.current_status)}`}>
-                                  {obligation.current_status}
-                                </span>
-                              </div>
-                              <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
-                              <div className="grid grid-cols-2 gap-1 text-[10px]">
-                                <div>
-                                  <span className="font-medium text-gray-500">ID:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.obligation_id}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Type:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.obligation_type}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Domain:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.domain}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Freq:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.frequency}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Due:</span>
-                                  <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Responsible:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.responsible}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Accountable:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.accountable}</span>
-                                </div>
-                                <div>
-                                  <span className="font-medium text-gray-500">Weight:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.compliance_weight}</span>
-                                </div>
-                                <div className="col-span-2">
-                                  <span className="font-medium text-gray-500">Clause:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.clause || 'N/A'}</span>
-                                </div>
-                                <div className="col-span-2">
-                                  <span className="font-medium text-gray-500">Region:</span>
-                                  <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
-                                </div>
-                                {obligation.evidence_required && (
-                                  <div className="col-span-2">
-                                    <span className="font-medium text-gray-500">Evidence:</span>
-                                    <span className="ml-1 text-gray-700">{obligation.evidence_type || 'Required'}</span>
-                                  </div>
-                                )}
-                                {obligation.mandatory && (
-                                  <div className="col-span-2">
-                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-100 text-red-800">
-                                      Mandatory
-                                    </span>
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                        {/* Expanded Name - shows full name when clicked */}
+                        {expandedObligationId === event.id && (
+                          <div 
+                            className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
+                            onClick={() => toggleObligationName(event.id)}
+                          >
+                            <p className="text-sm font-medium text-gray-900 break-words">{event.name}</p>
+                            <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
                           </div>
                         )}
+                        {/* Hover Tooltip for Event */}
+                        {hoveredObligation === event.id && !expandedObligationId && renderEventTooltip(event)}
                       </td>
-                      <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
+                      <td className="px-2 py-2">
                         <span className="text-xs text-gray-900">
-                          {obligation.domain}
+                          {event.domain || 'N/A'}
                         </span>
                       </td>
-                      <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
-                        <span
-                          className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
-                        >
-                          {obligation.frequency}
+                      <td className="px-2 py-2">
+                        <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-orange-100 text-orange-800">
+                          {event.frequency || 'Event Based'}
                         </span>
                       </td>
-                      <td className="px-2 py-2 whitespace-nowrap">
-                        <div className="flex items-center space-x-1">
-                          <span className={`text-xs ${dueDateColor}`}>
-                            {formatDate(dueDate)}
-                          </span>
-                          {isOverdue && dueDate && (
-                            <span className="inline-flex items-center px-1 py-0.5 rounded-full text-[9px] font-medium bg-red-100 text-red-800">
-                              Overdue
-                            </span>
-                          )}
+                      <td className="px-2 py-2">
+                        <div className="text-xs text-gray-600 truncate max-w-[150px] sm:max-w-[200px]">
+                          {event.description || 'No description'}
                         </div>
                       </td>
-                      <td className="px-2 py-2 whitespace-nowrap">
-                        <span
-                          className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
-                        >
-                          {obligation.current_status}
-                        </span>
-                      </td>
                     </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
+
+      {/* To Do Tab - Show Added Obligations with Status */}
+      {activeTab === "todo" && (
+        <div className="bg-white rounded-lg shadow overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Actions
+                  </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider min-w-[150px]">
+                    Obligation
+                  </th>
+                  <th className="hidden sm:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Domain
+                  </th>
+                  <th className="hidden md:table-cell px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Freq
+                  </th>
+                  <th 
+                    className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
+                    onClick={() => handleSort('dueDate')}
+                  >
+                    <div className="flex items-center">
+                      Due Date
+                      {getSortIcon('dueDate')}
+                    </div>
+                  </th>
+                  <th 
+                    className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider cursor-pointer hover:text-gray-700 transition-colors"
+                    onClick={() => handleSort('status')}
+                  >
+                    <div className="flex items-center">
+                      Status
+                      {getSortIcon('status')}
+                    </div>
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {filteredObligations.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" className="px-2 py-8 text-center text-gray-500 text-sm">
+                      {!isAdmin && userRegion 
+                        ? `No obligations found for region: ${userRegion}`
+                        : "No obligations found matching your filters."}
+                    </td>
+                  </tr>
+                ) : (
+                  filteredObligations.map((obligation, index) => {
+                    const dueDate = obligation.calculated_due_date;
+                    const isOverdue = isDueDateOverdue(dueDate);
+                    const dueDateColor = getDueDateColor(dueDate);
+                    const status = obligation.current_status || obligation.occurrence_status || 'Open';
+                    const uniqueKey = obligation.id + (obligation.instance_date || index);
+
+                    return (
+                      <tr
+                        key={uniqueKey}
+                        className="hover:bg-gray-50 transition-colors relative"
+                        onMouseEnter={() => setHoveredObligation(uniqueKey)}
+                        onMouseLeave={() => setHoveredObligation(null)}
+                      >
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <div className="flex items-center space-x-1">
+                            <Link
+                              to={`/compliance/${obligation.obligation_id}`}
+                              className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
+                              title="View Details"
+                            >
+                              <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                              </svg>
+                            </Link>
+                            {isAdmin && (
+                              <>
+                                <button
+                                  onClick={() => handleEditClick(obligation)}
+                                  className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                                  title="Edit"
+                                >
+                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                  </svg>
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteClick(obligation)}
+                                  className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                                  title="Delete"
+                                >
+                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                  </svg>
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2 relative max-w-[200px] sm:max-w-[250px] md:max-w-[300px]">
+                          <div 
+                            className="text-xs sm:text-sm font-medium text-gray-900 truncate cursor-pointer hover:text-[#8cc63e] transition-colors"
+                            onClick={() => toggleObligationName(uniqueKey)}
+                            title={obligation.name}
+                          >
+                            {obligation.name}
+                            {obligation.obligation_type === "Event" && (
+                              <span className="ml-1 text-[10px] text-orange-500 font-normal">
+                                (Event)
+                              </span>
+                            )}
+                            {obligation.month && obligation.year && (
+                              <span className="ml-1 text-[10px] text-gray-400 font-normal">
+                                ({obligation.month}/{obligation.year})
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-gray-500 truncate hidden sm:block">
+                            {obligation.description?.substring(0, 40)}...
+                          </div>
+                          
+                          {/* Expanded Name - shows full name when clicked */}
+                          {expandedObligationId === uniqueKey && (
+                            <div 
+                              className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
+                              onClick={() => toggleObligationName(uniqueKey)}
+                            >
+                              <p className="text-sm font-medium text-gray-900 break-words">{obligation.name}</p>
+                              <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
+                            </div>
+                          )}
+                          
+                          {/* Hover Tooltip */}
+                          {hoveredObligation === uniqueKey && !expandedObligationId && renderTooltip(obligation, dueDateColor, dueDate)}
+                        </td>
+                        <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
+                          <span className="text-xs text-gray-900">
+                            {obligation.domain}
+                          </span>
+                        </td>
+                        <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
+                          <span
+                            className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
+                          >
+                            {obligation.frequency}
+                          </span>
+                        </td>
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <div className="flex items-center space-x-1">
+                            <span className={`text-xs ${dueDateColor}`}>
+                              {formatDate(dueDate)}
+                            </span>
+                            {isOverdue && dueDate && (
+                              <span className="inline-flex items-center px-1 py-0.5 rounded-full text-[9px] font-medium bg-red-100 text-red-800">
+                                Overdue
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <span
+                            className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(status)}`}
+                          >
+                            {status}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Add New Obligation Modal */}
       {showAddModal && (isAdmin || canAddEvent) && (
@@ -1842,12 +2367,9 @@ const ComplianceRegister = () => {
                     required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    <option value="Not Started">Not Started</option>
-                    <option value="Pending">Pending</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Overdue">Overdue</option>
-                    <option value="Due Today">Due Today</option>
+                    <option value="Open">Open</option>
+                    <option value="Submitted/Under Review">Submitted/Under Review</option>
+                    <option value="Closed">Closed</option>
                   </select>
                 </div>
 
@@ -2200,12 +2722,9 @@ const ComplianceRegister = () => {
                     required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
-                    <option value="Not Started">Not Started</option>
-                    <option value="Pending">Pending</option>
-                    <option value="In Progress">In Progress</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Overdue">Overdue</option>
-                    <option value="Due Today">Due Today</option>
+                    <option value="Open">Open</option>
+                    <option value="Submitted/Under Review">Submitted/Under Review</option>
+                    <option value="Closed">Closed</option>
                   </select>
                 </div>
 
