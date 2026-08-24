@@ -46,10 +46,6 @@ const getRegionName = async (regionId) => {
   }
 }
 
-// ============================================================
-// OBLIGATION FETCHING
-// ============================================================
-
 export const getObligations = async (
   filters = {},
   userRegion = null,
@@ -79,74 +75,95 @@ export const getObligations = async (
     console.log(`📅 Month filter active: ${hasMonthFilter}, Month: ${monthValue}, Year: ${yearValue}`);
 
     // ---------------------------------------------------------
-    // 3. QUERY compliance_progress
+    // 3. QUERY compliance_progress WITH PAGINATION
     // ---------------------------------------------------------
-    let progressQuery = supabase
-      .from("compliance_progress")
-      .select(`
-        id,
-        obligation_id,
-        region_id,
-        occurrence_date,
-        calculated_due_date,
-        status,
-        evidence_id,
-        uploaded_by,
-        updated_by,
-        comments,
-        created_at,
-        updated_at
-      `);
+    const PAGE_SIZE = 1000;
+    let allProgressData = [];
+    let pageStart = 0;
+    let hasMore = true;
 
-    if (!isAdmin && userRegionId) {
-      progressQuery = progressQuery.eq("region_id", userRegionId);
-    }
+    while (hasMore) {
+      let progressQuery = supabase
+        .from("compliance_progress")
+        .select(`
+          id,
+          obligation_id,
+          region_id,
+          occurrence_date,
+          calculated_due_date,
+          status,
+          evidence_id,
+          uploaded_by,
+          updated_by,
+          comments,
+          created_at,
+          updated_at
+        `)
+        .range(pageStart, pageStart + PAGE_SIZE - 1);
 
-    // ---------------------------------------------------------
-    // 4. APPLY MONTH/YEAR FILTERS IF PRESENT
-    // ---------------------------------------------------------
-    if (hasMonthFilter) {
-      const year = parseInt(yearValue);
-      const month = parseInt(monthValue);
-      if (!isNaN(year) && !isNaN(month)) {
-        const startDate = new Date(year, month - 1, 1);
-        const endDate = new Date(year, month, 0);
-        const formatDate = (date) => date.toISOString().split("T")[0];
-        progressQuery = progressQuery
-          .gte("occurrence_date", formatDate(startDate))
-          .lte("occurrence_date", formatDate(endDate));
-        console.log(`📅 Filtering by month: ${month}/${year}`);
+      if (!isAdmin && userRegionId) {
+        progressQuery = progressQuery.eq("region_id", userRegionId);
       }
-    } else if (yearValue !== '' && yearValue !== 'all') {
-      const year = parseInt(yearValue);
-      if (!isNaN(year)) {
-        const startDate = `${year}-01-01`;
-        const endDate = `${year}-12-31`;
-        progressQuery = progressQuery
-          .gte("occurrence_date", startDate)
-          .lte("occurrence_date", endDate);
-        console.log(`📅 Filtering by year: ${year}`);
+
+      // ---------------------------------------------------------
+      // 4. APPLY MONTH/YEAR FILTERS IF PRESENT
+      // ---------------------------------------------------------
+      if (hasMonthFilter) {
+        const year = parseInt(yearValue);
+        const month = parseInt(monthValue);
+        if (!isNaN(year) && !isNaN(month)) {
+          const startDate = new Date(year, month - 1, 1);
+          const endDate = new Date(year, month, 0);
+          const formatDate = (date) => date.toISOString().split("T")[0];
+          progressQuery = progressQuery
+            .gte("occurrence_date", formatDate(startDate))
+            .lte("occurrence_date", formatDate(endDate));
+          console.log(`📅 Filtering by month: ${month}/${year}`);
+        }
+      } else if (yearValue !== '' && yearValue !== 'all') {
+        const year = parseInt(yearValue);
+        if (!isNaN(year)) {
+          const startDate = `${year}-01-01`;
+          const endDate = `${year}-12-31`;
+          progressQuery = progressQuery
+            .gte("occurrence_date", startDate)
+            .lte("occurrence_date", endDate);
+          console.log(`📅 Filtering by year: ${year}`);
+        }
+      }
+
+      progressQuery = progressQuery.order("occurrence_date", { ascending: false });
+
+      const { data: progressData, error: progressError } = await progressQuery;
+
+      if (progressError) {
+        throw progressError;
+      }
+
+      if (!progressData || progressData.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      allProgressData.push(...progressData);
+      
+      if (progressData.length < PAGE_SIZE) {
+        hasMore = false;
+      } else {
+        pageStart += PAGE_SIZE;
       }
     }
 
-    progressQuery = progressQuery.order("occurrence_date", { ascending: false });
+    console.log(`📊 Found ${allProgressData?.length || 0} progress records`);
 
-    const { data: progressData, error: progressError } = await progressQuery;
-
-    if (progressError) {
-      throw progressError;
-    }
-
-    console.log(`📊 Found ${progressData?.length || 0} progress records`);
-
-    if (!progressData || progressData.length === 0) {
+    if (!allProgressData || allProgressData.length === 0) {
       return { data: [], error: null };
     }
 
     // ---------------------------------------------------------
     // 5. Get unique obligation_ids from progress records
     // ---------------------------------------------------------
-    const obligationIds = [...new Set(progressData.map(p => p.obligation_id))];
+    const obligationIds = [...new Set(allProgressData.map(p => p.obligation_id))];
     console.log(`📋 Found ${obligationIds.length} unique obligation IDs in progress`);
 
     // ---------------------------------------------------------
@@ -210,7 +227,7 @@ export const getObligations = async (
       console.log(`📋 Month filter active (${monthValue}/${yearValue}) - Showing UNIQUE obligations for this month`);
       
       const latestProgressMap = {};
-      progressData.forEach(progress => {
+      allProgressData.forEach(progress => {
         if (!latestProgressMap[progress.obligation_id]) {
           latestProgressMap[progress.obligation_id] = progress;
         }
@@ -248,7 +265,7 @@ export const getObligations = async (
     } else {
       console.log('📋 No filter - Showing ALL progress records (duplicates allowed)');
       
-      processedData = progressData.map(progress => {
+      processedData = allProgressData.map(progress => {
         const obligation = obligationMap[progress.obligation_id] || {};
         
         return {
@@ -1786,18 +1803,22 @@ export const getDashboardStats = async (
 // ============================================================
 
 // ============================================================
-// COMPLIANCE BY DOMAIN - FIXED
+// COMPLIANCE BY DOMAIN - FIXED FOR ADMIN
 // ============================================================
 
 export const getComplianceByDomain = async (userRegion = null, isAdmin = false) => {
   try {
+    console.log('🔍 [ComplianceByDomain] ========== START ==========');
     console.log('🔍 [ComplianceByDomain] Fetching for:', { userRegion, isAdmin });
 
     let regionId = null;
     if (!isAdmin && userRegion) {
       regionId = await getRegionId(userRegion);
+      console.log('🔍 [ComplianceByDomain] Region ID:', regionId);
     }
 
+    // Fetch ALL obligations with their domains and compliance weights
+    console.log('🔍 [ComplianceByDomain] Fetching all obligations...');
     const { data: obligations, error: obligationsError } = await supabase
       .from('compliance_obligations')
       .select('obligation_id, domain, compliance_weight, obligation_type');
@@ -1807,61 +1828,229 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
       throw obligationsError;
     }
 
+    console.log(`📋 [ComplianceByDomain] Found ${obligations?.length || 0} obligations`);
+
     if (!obligations || obligations.length === 0) {
+      console.log('⚠️ [ComplianceByDomain] No obligations found');
       return { domains: [], compliance: [] };
     }
 
-    let progressQuery = supabase
-      .from('compliance_progress')
-      .select('obligation_id, status, occurrence_date, region_id');
+    // Get all obligation IDs
+    const obligationIds = obligations.map(o => o.obligation_id);
+    console.log(`📋 [ComplianceByDomain] Obligation IDs: ${obligationIds.length} total`);
 
-    if (regionId) {
-      progressQuery = progressQuery.eq('region_id', regionId);
-    }
+    // Fetch progress records with pagination
+    console.log('🔍 [ComplianceByDomain] Fetching progress records...');
+    const PAGE_SIZE = 1000;
+    let allProgressData = [];
+    let pageStart = 0;
+    let hasMore = true;
 
-    const { data: progressData, error: progressError } = await progressQuery;
+    while (hasMore) {
+      let progressQuery = supabase
+        .from('compliance_progress')
+        .select('obligation_id, status, occurrence_date, region_id')
+        .range(pageStart, pageStart + PAGE_SIZE - 1);
 
-    if (progressError) {
-      console.error('❌ [ComplianceByDomain] Error fetching progress:', progressError);
-      throw progressError;
-    }
-
-    if (!progressData || progressData.length === 0) {
-      return { domains: [], compliance: [] };
-    }
-
-    // Get the latest status for each obligation (only Closed status counts as completed)
-    const latestStatusMap = {};
-    progressData.forEach(p => {
-      if (!latestStatusMap[p.obligation_id] || 
-          new Date(p.occurrence_date) > new Date(latestStatusMap[p.obligation_id].occurrence_date)) {
-        latestStatusMap[p.obligation_id] = p;
+      if (regionId) {
+        progressQuery = progressQuery.eq('region_id', regionId);
+        console.log(`🔍 [ComplianceByDomain] Filtering by region ID: ${regionId}`);
       }
-    });
+
+      const { data: pageData, error: pageError } = await progressQuery;
+
+      if (pageError) {
+        console.error('❌ [ComplianceByDomain] Error fetching progress page:', pageError);
+        throw pageError;
+      }
+
+      if (!pageData || pageData.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      allProgressData.push(...pageData);
+      
+      if (pageData.length < PAGE_SIZE) {
+        hasMore = false;
+      } else {
+        pageStart += PAGE_SIZE;
+      }
+    }
+
+    console.log(`📊 [ComplianceByDomain] Found ${allProgressData?.length || 0} total progress records`);
+
+    // Filter progress records to only include those for our obligations
+    const obligationIdSet = new Set(obligationIds);
+    const progressData = allProgressData?.filter(p => obligationIdSet.has(p.obligation_id)) || [];
+    
+    console.log(`📊 [ComplianceByDomain] Filtered to ${progressData.length} progress records for our obligations`);
+
+    // For ADMIN: We need to check if ANY region has the obligation as 'Closed'
+    // For REGIONAL: We only check the specific region
+    const latestStatusMap = {};
+    
+    if (progressData) {
+      console.log('🔍 [ComplianceByDomain] Building latest status map...');
+      
+      if (isAdmin) {
+        // ADMIN: For each obligation, if ANY region has it closed, mark it as closed
+        console.log('👑 [ComplianceByDomain] Admin mode - checking all regions for closed status');
+        
+        // Group by obligation_id to see all statuses across regions
+        const obligationStatuses = {};
+        progressData.forEach(p => {
+          if (!obligationStatuses[p.obligation_id]) {
+            obligationStatuses[p.obligation_id] = [];
+          }
+          obligationStatuses[p.obligation_id].push({
+            status: p.status,
+            date: p.occurrence_date,
+            region_id: p.region_id
+          });
+        });
+
+        // For each obligation, check if ANY region has it closed
+        for (const [obligationId, statuses] of Object.entries(obligationStatuses)) {
+          // Check if any status is 'Closed'
+          const hasClosed = statuses.some(s => s.status === 'Closed');
+          
+          if (hasClosed) {
+            // Find the most recent closed record
+            const closedRecords = statuses.filter(s => s.status === 'Closed');
+            const mostRecentClosed = closedRecords.reduce((a, b) => 
+              new Date(a.date) > new Date(b.date) ? a : b
+            );
+            
+            latestStatusMap[obligationId] = {
+              status: 'Closed',
+              date: mostRecentClosed.date,
+              region_id: mostRecentClosed.region_id
+            };
+            console.log(`📊 [ComplianceByDomain] ✅ ${obligationId} is CLOSED in at least one region`);
+          } else {
+            // Get the most recent status (not closed)
+            const mostRecent = statuses.reduce((a, b) => 
+              new Date(a.date) > new Date(b.date) ? a : b
+            );
+            latestStatusMap[obligationId] = {
+              status: mostRecent.status,
+              date: mostRecent.date,
+              region_id: mostRecent.region_id
+            };
+            console.log(`📊 [ComplianceByDomain] ❌ ${obligationId} is ${mostRecent.status} (no closed regions)`);
+          }
+        }
+      } else {
+        // REGIONAL: Only check the specific region
+        progressData.forEach(p => {
+          const obligationId = p.obligation_id;
+          const current = latestStatusMap[obligationId];
+          
+          if (!current) {
+            latestStatusMap[obligationId] = {
+              status: p.status,
+              date: p.occurrence_date,
+              region_id: p.region_id
+            };
+          } else if (p.status === 'Closed' && current.status !== 'Closed') {
+            latestStatusMap[obligationId] = {
+              status: p.status,
+              date: p.occurrence_date,
+              region_id: p.region_id
+            };
+          } else if (current.status !== 'Closed' && 
+                     new Date(p.occurrence_date) > new Date(current.date)) {
+            latestStatusMap[obligationId] = {
+              status: p.status,
+              date: p.occurrence_date,
+              region_id: p.region_id
+            };
+          }
+        });
+      }
+    }
+
+    console.log(`📊 [ComplianceByDomain] Latest status map has ${Object.keys(latestStatusMap).length} entries`);
 
     // Group by domain and calculate compliance
     const domainMap = {};
+    
     obligations.forEach(o => {
-      if (!domainMap[o.domain]) {
-        domainMap[o.domain] = { total: 0, achieved: 0 };
-      }
-      domainMap[o.domain].total += o.compliance_weight || 1;
+      const domain = o.domain || 'Uncategorized';
       
-      const latest = latestStatusMap[o.obligation_id];
-      // Only count as achieved if status is 'Closed'
-      if (latest && latest.status === 'Closed') {
-        domainMap[o.domain].achieved += o.compliance_weight || 1;
+      if (!domainMap[domain]) {
+        domainMap[domain] = { 
+          totalWeight: 0, 
+          achievedWeight: 0,
+          totalObligations: 0,
+          closedObligations: 0,
+          obligationIds: []
+        };
+      }
+      
+      const weight = Number(o.compliance_weight) || 1;
+      domainMap[domain].totalWeight += weight;
+      domainMap[domain].totalObligations += 1;
+      domainMap[domain].obligationIds.push(o.obligation_id);
+      
+      const statusData = latestStatusMap[o.obligation_id];
+      if (statusData && statusData.status === 'Closed') {
+        domainMap[domain].achievedWeight += weight;
+        domainMap[domain].closedObligations += 1;
+        console.log(`📊 [ComplianceByDomain] ✅ ${o.obligation_id} (${domain}) is CLOSED - weight ${weight}`);
+      } else {
+        console.log(`📊 [ComplianceByDomain] ❌ ${o.obligation_id} (${domain}) is ${statusData?.status || 'Open'} - NOT closed`);
       }
     });
 
-    const domains = Object.keys(domainMap);
-    const compliance = domains.map(d => 
-      Number(((domainMap[d].achieved / domainMap[d].total) * 100).toFixed(1))
-    );
+    // Calculate compliance percentage for each domain with decimals
+    const domains = [];
+    const compliance = [];
+    const details = {};
 
-    return { domains, compliance };
+    for (const [domain, data] of Object.entries(domainMap)) {
+      domains.push(domain);
+      let percentage = 0;
+      
+      if (data.totalWeight > 0) {
+        const rawPercentage = (data.achievedWeight / data.totalWeight) * 100;
+        percentage = parseFloat(rawPercentage.toFixed(1));
+        console.log(`📊 [ComplianceByDomain] ${domain}: ${percentage}% (${data.closedObligations}/${data.totalObligations} closed, ${data.achievedWeight}/${data.totalWeight} weight)`);
+      }
+      
+      compliance.push(percentage);
+      
+      details[domain] = {
+        total: data.totalObligations,
+        closed: data.closedObligations,
+        totalWeight: data.totalWeight,
+        achievedWeight: data.achievedWeight,
+        percentage: percentage,
+        obligationIds: data.obligationIds
+      };
+    }
+
+    // Sort by compliance percentage (highest first)
+    const sortedIndices = domains.map((_, i) => i).sort((a, b) => compliance[b] - compliance[a]);
+    const sortedDomains = sortedIndices.map(i => domains[i]);
+    const sortedCompliance = sortedIndices.map(i => compliance[i]);
+
+    const result = { 
+      domains: sortedDomains, 
+      compliance: sortedCompliance,
+      details: details
+    };
+
+    console.log('📊 [ComplianceByDomain] ========== RESULT ==========');
+    console.log('📊 [ComplianceByDomain] Domains:', sortedDomains);
+    console.log('📊 [ComplianceByDomain] Compliance percentages:', sortedCompliance);
+    console.log('📊 [ComplianceByDomain] ========== END ==========');
+
+    return result;
   } catch (error) {
     console.error('❌ [ComplianceByDomain] Error:', error);
+    console.error('❌ [ComplianceByDomain] Stack trace:', error.stack);
     return { domains: [], compliance: [] };
   }
 };

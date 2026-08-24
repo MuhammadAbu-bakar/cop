@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
 import { 
   FaChartLine, 
   FaClock, 
@@ -14,6 +14,7 @@ import {
   FaExclamation
 } from 'react-icons/fa';
 import { getDashboardStats } from "../../api/compliance";
+import { supabase } from "../../api/supabase";
 
 const ComplianceStats = ({ userRegion, isAdmin }) => {
   const navigate = useNavigate();
@@ -33,9 +34,9 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     mandatoryObligations: 0,
     totalOccurrences: 0,
   });
-  const [debugInfo, setDebugInfo] = useState(null);
   const [regionsData, setRegionsData] = useState([]);
   const [showRegionsModal, setShowRegionsModal] = useState(false);
+  const [monthlyOverdueData, setMonthlyOverdueData] = useState([]);
 
   useEffect(() => {
     fetchStats();
@@ -48,20 +49,13 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       const statsData = await getDashboardStats(userRegion, isAdmin);
       console.log('📊 [ComplianceStats] Stats received:', statsData);
       
-      // Store debug info
-      setDebugInfo({
-        totalOccurrences: statsData.totalOccurrences,
-        closed: statsData.completed,
-        submitted: statsData.inProgress,
-        open: statsData.pending,
-        overdue: statsData.overdue,
-        evidenceCount: statsData.evidenceCompletion
-      });
-      
       setStats(statsData);
 
       // Fetch regions data for the "Regions Below Target" card
       await fetchRegionsData();
+      
+      // Fetch monthly overdue data
+      await fetchMonthlyOverdueData();
       
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
@@ -108,12 +102,97 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     }
   };
 
-  const handleCardClick = (filterType, filterValue) => {
-    const params = new URLSearchParams();
-    if (filterType === 'status') {
-      params.set('status', filterValue);
+  const fetchMonthlyOverdueData = async () => {
+    try {
+      const today = new Date();
+      const currentMonth = today.getMonth();
+      const currentYear = today.getFullYear();
+      
+      // Get data from January to current month
+      const months = [];
+      const overdueCounts = [];
+      
+      // Loop from January (0) to current month
+      for (let month = 0; month <= currentMonth; month++) {
+        const startDate = new Date(currentYear, month, 1);
+        const endDate = new Date(currentYear, month + 1, 0);
+        
+        const startDateStr = startDate.toISOString().split('T')[0];
+        const endDateStr = endDate.toISOString().split('T')[0];
+        
+        // Get overdue obligations for this month
+        let query = supabase
+          .from('compliance_progress')
+          .select('status, calculated_due_date')
+          .neq('status', 'Closed')
+          .gte('calculated_due_date', startDateStr)
+          .lte('calculated_due_date', endDateStr);
+        
+        // Apply region filter if not admin
+        if (!isAdmin && userRegion) {
+          const regionId = await getRegionId(userRegion);
+          if (regionId) {
+            query = query.eq('region_id', regionId);
+          }
+        }
+        
+        const { data, error } = await query;
+        
+        if (error) {
+          console.error('Error fetching monthly overdue:', error);
+          overdueCounts.push(0);
+        } else {
+          // Count overdue items (where due date is in the past for this month)
+          const overdue = data?.filter(item => {
+            const dueDate = new Date(item.calculated_due_date);
+            dueDate.setHours(0, 0, 0, 0);
+            const todayDate = new Date();
+            todayDate.setHours(0, 0, 0, 0);
+            return dueDate < todayDate;
+          }).length || 0;
+          overdueCounts.push(overdue);
+        }
+        
+        // Get month name (3 letters)
+        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+        months.push(monthNames[month]);
+      }
+      
+      setMonthlyOverdueData(months.map((month, index) => ({
+        month: month,
+        overdue: overdueCounts[index] || 0
+      })));
+      
+    } catch (error) {
+      console.error('Error fetching monthly overdue data:', error);
+      setMonthlyOverdueData([]);
     }
-    navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`);
+  };
+
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  const handleCardClick = (filterType, filterValue) => {
+    // Only navigate for status filters
+    if (filterType === 'status') {
+      const params = new URLSearchParams();
+      params.set('status', filterValue);
+      navigate(`/compliance?${params.toString()}`);
+    }
   };
 
   const getStatIcon = (title, color) => {
@@ -174,16 +253,74 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     );
   };
 
+  const OverdueBarChart = ({ data }) => {
+    if (!data || data.length === 0) {
+      return (
+        <div className="text-center text-gray-400 text-xs py-4">
+          No overdue data available
+        </div>
+      );
+    }
+
+    const maxValue = Math.max(...data.map(d => d.overdue), 1);
+
+    return (
+      <div className="w-full h-20 mt-1">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 5, right: 5, left: 5, bottom: 5 }}>
+            <XAxis 
+              dataKey="month" 
+              tick={{ 
+                fontSize: 9, 
+                fontWeight: 500,
+                fill: '#6b7280',
+                angle: 90,
+                textAnchor: 'start',
+                height: 30
+              }}
+              axisLine={false}
+              tickLine={false}
+              interval={0}
+              height={30}
+            />
+            <YAxis 
+              hide={true}
+              domain={[0, maxValue + 2]}
+            />
+            <Tooltip 
+              formatter={(value) => [`${value} overdue`, 'Count']}
+              contentStyle={{
+                fontSize: '10px',
+                padding: '4px 8px',
+                backgroundColor: 'white',
+                border: '1px solid #e5e7eb',
+                borderRadius: '4px'
+              }}
+            />
+            <Bar 
+              dataKey="overdue" 
+              fill="#ef4444" 
+              radius={[2, 2, 0, 0]}
+              barSize={16}
+            />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    );
+  };
+
   const statCards = [
     {
       title: "Evidence Completion",
       value: `${Math.min(stats.overallCompliance || 0, 100)}%`,
       color: "#8b5cf6",
-      filterType: "all",
+      filterType: null,
       filterValue: null,
       isPrimary: true,
       showDonut: true,
       percentage: Math.min(stats.overallCompliance || 0, 100),
+      isClickable: false,
+      sizeLevel: "xl", // Extra large
     },
     {
       title: "Closed Obligations",
@@ -193,6 +330,8 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       filterType: "status",
       filterValue: "Closed",
       showDonut: false,
+      isClickable: true,
+      sizeLevel: "lg", // Large (reduced from xl)
     },
     {
       title: "Submitted/Under Review",
@@ -202,15 +341,21 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       filterType: "status",
       filterValue: "Submitted/Under Review",
       showDonut: false,
+      isClickable: true,
+      sizeLevel: "lg", // Large (reduced from xl)
     },
     {
       title: "Overdue Obligations",
       value: stats.overdue || 0,
       color: "#ef4444",
-      filterType: "status",
-      filterValue: "Overdue",
+      filterType: null,
+      filterValue: null,
       isWarning: true,
       showDonut: false,
+      isClickable: false,
+      showBarChart: true,
+      barChartData: monthlyOverdueData,
+      sizeLevel: "md", // Medium
     },
     {
       title: "High-Risk Gaps",
@@ -220,6 +365,8 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       filterValue: null,
       isWarning: true,
       showDonut: false,
+      isClickable: false,
+      sizeLevel: "md", // Medium
     },
     {
       title: "Regions Below Target",
@@ -231,8 +378,22 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       filterValue: null,
       showDonut: false,
       isClickable: true,
+      sizeLevel: "md", // Medium
     },
   ];
+
+  const getValueSizeClass = (sizeLevel, isWarning = false) => {
+    switch(sizeLevel) {
+      case 'xl':
+        return `text-2xl sm:text-3xl md:text-4xl lg:text-5xl ${isWarning ? 'text-red-600' : 'text-gray-900'}`;
+      case 'lg':
+        return `text-xl sm:text-2xl md:text-3xl lg:text-4xl ${isWarning ? 'text-red-600' : 'text-gray-900'}`;
+      case 'md':
+        return `text-lg sm:text-xl md:text-2xl ${isWarning ? 'text-red-600' : 'text-gray-900'}`;
+      default:
+        return `text-lg sm:text-xl md:text-2xl ${isWarning ? 'text-red-600' : 'text-gray-900'}`;
+    }
+  };
 
   const renderRegionsModal = () => {
     if (!showRegionsModal) return null;
@@ -317,25 +478,30 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     );
   }
 
+  // Get today's date formatted
+  const today = new Date();
+  const formattedDate = today.toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
+
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5 lg:p-6 overflow-hidden">
       <div className="mb-4">
-        <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
-          Executive Summary
-        </h3>
-        <p className="text-xs text-gray-500 mt-0.5">Compliance overview at a glance</p>
-        
-        {debugInfo && (
-          <div className="mt-2 p-2 bg-gray-100 rounded text-xs text-gray-500 overflow-x-auto">
-            <span className="font-medium">Debug:</span> 
-            Total: {debugInfo.totalOccurrences} | 
-            Closed: {debugInfo.closed} | 
-            Submitted: {debugInfo.submitted} | 
-            Open: {debugInfo.open} | 
-            Overdue: {debugInfo.overdue} | 
-            Evidence: {debugInfo.evidenceCount}%
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
+              Executive Summary
+            </h3>
+            <p className="text-xs text-gray-500 mt-0.5">Compliance overview at a glance</p>
           </div>
-        )}
+          <div className="text-right">
+            <p className="text-xs text-gray-400">
+              <span className="font-medium">Stats till date:</span> {formattedDate}
+            </p>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
@@ -345,20 +511,20 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
             onClick={() => {
               if (stat.title === "Regions Below Target") {
                 setShowRegionsModal(true);
-              } else if (stat.filterType === 'status' && stat.filterValue === 'Overdue') {
-                navigate('/compliance?status=overdue');
-              } else if (stat.filterType) {
+              } else if (stat.filterType === 'status' && stat.isClickable) {
                 handleCardClick(stat.filterType, stat.filterValue);
               }
             }}
-            className={`bg-white rounded-lg border hover:shadow-lg transition-all p-3 sm:p-4 flex flex-col items-center ${
-              stat.filterType || stat.title === "Regions Below Target" ? "cursor-pointer hover:border-gray-300" : "cursor-default"
+            className={`bg-white rounded-lg border hover:shadow-lg transition-all p-3 sm:p-4 flex flex-col items-center justify-center ${
+              (stat.filterType && stat.isClickable) || stat.title === "Regions Below Target" 
+                ? "cursor-pointer hover:border-gray-300" 
+                : "cursor-default"
             } ${stat.isWarning ? "border-red-200" : "border-gray-200"} ${
               stat.isPrimary ? "border-t-4" : ""
             }`}
             style={stat.isPrimary ? { borderTopColor: stat.color } : {}}
           >
-            <div className="flex-1 w-full">
+            <div className="flex-1 w-full flex flex-col items-center justify-center">
               <div className="flex items-center justify-center gap-1.5 mb-1">
                 {getStatIcon(stat.title, stat.color)}
                 <p className="text-[10px] xs:text-[11px] text-gray-500 font-medium uppercase tracking-wide text-center">
@@ -374,31 +540,35 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
                     color={stat.color}
                   />
                 </div>
+              ) : stat.showBarChart ? (
+                <div className="w-full flex flex-col items-center">
+                  <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, stat.isWarning)}`}>
+                    {stat.value}
+                  </span>
+                  <OverdueBarChart data={stat.barChartData} />
+                </div>
               ) : (
-                <div className="mt-1 text-center">
+                <div className="mt-1 text-center flex flex-col items-center">
                   {stat.title === "Regions Below Target" && !isAdmin && regionsData.length > 0 && regionsData[0]?.isBelowTarget ? (
                     <div className="flex items-center justify-center gap-1.5">
                       <FaExclamation className="h-5 w-5 text-red-600" />
-                      <span className={`text-lg sm:text-xl md:text-2xl font-bold text-red-600`}>
+                      <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, true)}`}>
                         Yes
                       </span>
                     </div>
                   ) : stat.title === "Regions Below Target" && !isAdmin ? (
-                    <span className={`text-lg sm:text-xl md:text-2xl font-bold text-red-600`}>
-                      Yes
+                    <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, false)}`}>
+                      No
                     </span>
                   ) : (
-                    <span className={`text-lg sm:text-xl md:text-2xl font-bold ${
-                      stat.isWarning ? "text-red-600" : "text-gray-900"
-                    }`}>
+                    <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, stat.isWarning)}`}>
                       {stat.value}
                     </span>
                   )}
+                  {stat.subtitle && (
+                    <p className="text-[10px] xs:text-xs text-gray-500 text-center mt-0.5">{stat.subtitle}</p>
+                  )}
                 </div>
-              )}
-              
-              {stat.subtitle && (
-                <p className="text-[10px] xs:text-xs text-gray-500 text-center mt-0.5">{stat.subtitle}</p>
               )}
             </div>
           </div>

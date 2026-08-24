@@ -1,167 +1,38 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../api/supabase";
+import { getComplianceByDomain } from "../../api/compliance";
 
 const ComplianceChart = ({ userRegion, isAdmin }) => {
   const [loading, setLoading] = useState(true);
   const [chartData, setChartData] = useState({ domains: [], compliance: [] });
+  const [debugInfo, setDebugInfo] = useState(null);
 
   useEffect(() => {
     fetchChartData();
   }, [userRegion, isAdmin]);
 
-  const getRegionId = async (regionName) => {
-    if (!regionName) return null;
-    try {
-      const { data, error } = await supabase
-        .from('regions')
-        .select('id')
-        .eq('name', regionName)
-        .single();
-      
-      if (error) return null;
-      return data?.id || null;
-    } catch (error) {
-      console.error('Error getting region ID:', error);
-      return null;
-    }
-  };
-
   const fetchChartData = async () => {
     setLoading(true);
     try {
-      // Get region ID if not admin
-      let regionId = null;
-      if (!isAdmin && userRegion) {
-        regionId = await getRegionId(userRegion);
-      }
-
-      console.log('📊 [ComplianceChart] Fetching for:', { userRegion, isAdmin, regionId });
-
-      // Fetch all obligations with their domains and compliance weights
-      const { data: obligations, error: obligationsError } = await supabase
-        .from('compliance_obligations')
-        .select('obligation_id, domain, compliance_weight');
-
-      if (obligationsError) throw obligationsError;
-
-      if (!obligations || obligations.length === 0) {
-        setChartData({ domains: [], compliance: [] });
-        setLoading(false);
-        return;
-      }
-
-      // Get all obligation IDs
-      const obligationIds = obligations.map(o => o.obligation_id);
-
-      // Fetch progress records for these obligations
-      let progressQuery = supabase
-        .from('compliance_progress')
-        .select('obligation_id, status, region_id, occurrence_date')
-        .in('obligation_id', obligationIds);
-
-      if (regionId) {
-        progressQuery = progressQuery.eq('region_id', regionId);
-      }
-
-      const { data: progressData, error: progressError } = await progressQuery;
-
-      if (progressError) throw progressError;
-
-      console.log('📊 [ComplianceChart] Progress data:', progressData?.length || 0);
-
-      // Create a map of obligation_id to the latest status
-      // IMPORTANT: For admin, we need to consider ALL regions
-      // For non-admin, only the user's region
-      const obligationStatusMap = {};
+      console.log('📊 [ComplianceChart] Fetching for:', { userRegion, isAdmin });
       
-      if (progressData) {
-        progressData.forEach(p => {
-          // For each obligation, keep the most recent status
-          // If multiple records, prioritize 'Closed' status
-          const current = obligationStatusMap[p.obligation_id];
-          
-          if (!current) {
-            obligationStatusMap[p.obligation_id] = {
-              status: p.status,
-              date: p.occurrence_date
-            };
-          } else {
-            // If this record is Closed, prioritize it
-            if (p.status === 'Closed') {
-              obligationStatusMap[p.obligation_id] = {
-                status: p.status,
-                date: p.occurrence_date
-              };
-            } 
-            // If current is not Closed and this record is more recent
-            else if (current.status !== 'Closed' && 
-                     new Date(p.occurrence_date) > new Date(current.date)) {
-              obligationStatusMap[p.obligation_id] = {
-                status: p.status,
-                date: p.occurrence_date
-              };
-            }
-          }
-        });
-      }
-
-      console.log('📊 [ComplianceChart] Status map:', obligationStatusMap);
-
-      // Calculate compliance by domain
-      const domainMap = {};
-
-      obligations.forEach(obligation => {
-        const domain = obligation.domain || 'Uncategorized';
-        const weight = Number(obligation.compliance_weight) || 1;
-        const statusData = obligationStatusMap[obligation.obligation_id];
-        const status = statusData?.status || 'Open';
-        const isClosed = status === 'Closed';
-
-        if (!domainMap[domain]) {
-          domainMap[domain] = {
-            totalWeight: 0,
-            achievedWeight: 0,
-            totalObligations: 0,
-            closedObligations: 0,
-          };
-        }
-
-        domainMap[domain].totalWeight += weight;
-        domainMap[domain].totalObligations += 1;
+      // Use the updated API function
+      const result = await getComplianceByDomain(userRegion, isAdmin);
+      console.log('📊 [ComplianceChart] Result from API:', result);
+      
+      if (result && result.domains && result.compliance) {
+        // Store debug info
+        setDebugInfo(result.details);
         
-        if (isClosed) {
-          domainMap[domain].achievedWeight += weight;
-          domainMap[domain].closedObligations += 1;
-        }
-      });
-
-      console.log('📊 [ComplianceChart] Domain map:', domainMap);
-
-      // Calculate compliance percentage for each domain
-      const domains = [];
-      const compliance = [];
-
-      for (const [domain, data] of Object.entries(domainMap)) {
-        domains.push(domain);
-        const percentage = data.totalWeight > 0 
-          ? parseFloat(((data.achievedWeight / data.totalWeight) * 100).toFixed(1))
-          : 0;
-        compliance.push(percentage);
-        
-        console.log(`📊 [ComplianceChart] ${domain}: ${data.closedObligations}/${data.totalObligations} closed = ${percentage}%`);
+        // Consolidate domains
+        const consolidatedData = consolidateDomains(result.domains, result.compliance, result.details);
+        console.log('📊 [ComplianceChart] Consolidated data:', consolidatedData);
+        setChartData(consolidatedData);
+      } else {
+        console.log('📊 [ComplianceChart] No data received');
+        setChartData({ domains: [], compliance: [] });
+        setDebugInfo(null);
       }
-
-      // Sort by compliance percentage (highest first)
-      const sortedIndices = domains.map((_, i) => i).sort((a, b) => compliance[b] - compliance[a]);
-      const sortedDomains = sortedIndices.map(i => domains[i]);
-      const sortedCompliance = sortedIndices.map(i => compliance[i]);
-
-      setChartData({ 
-        domains: sortedDomains, 
-        compliance: sortedCompliance,
-        domainMap: domainMap 
-      });
-
     } catch (error) {
       console.error('Error fetching chart data:', error);
       setChartData({ domains: [], compliance: [] });
@@ -171,7 +42,7 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
   };
 
   // Consolidate domains
-  const consolidateDomains = (domains, compliance, domainMap) => {
+  const consolidateDomains = (domains, compliance, details) => {
     const consolidationRules = {
       'Power': ['Power', 'CP Billing', 'Battery'],
       'Inventory': ['Inventory', 'Asset'],
@@ -205,6 +76,8 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
           domains: [],
           totalWeight: 0,
           achievedWeight: 0,
+          totalObligations: 0,
+          closedObligations: 0
         };
       }
       
@@ -212,10 +85,12 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
       domainMapConsolidated[consolidatedKey].count += 1;
       domainMapConsolidated[consolidatedKey].domains.push(domain);
       
-      // Add weight data if available
-      if (domainMap && domainMap[domain]) {
-        domainMapConsolidated[consolidatedKey].totalWeight += domainMap[domain].totalWeight || 0;
-        domainMapConsolidated[consolidatedKey].achievedWeight += domainMap[domain].achievedWeight || 0;
+      // Add detail data if available
+      if (details && details[domain]) {
+        domainMapConsolidated[consolidatedKey].totalWeight += details[domain].totalWeight || 0;
+        domainMapConsolidated[consolidatedKey].achievedWeight += details[domain].achievedWeight || 0;
+        domainMapConsolidated[consolidatedKey].totalObligations += details[domain].total || 0;
+        domainMapConsolidated[consolidatedKey].closedObligations += details[domain].closed || 0;
       }
     }
 
@@ -232,18 +107,15 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
         average = parseFloat((value.totalValue / value.count).toFixed(1));
       }
       consolidatedCompliance.push(average);
+      
+      console.log(`📊 [ComplianceChart] Consolidated ${key}: ${average}% (${value.closedObligations}/${value.totalObligations} closed)`);
     }
 
     return { 
       domains: consolidatedDomains, 
-      compliance: consolidatedCompliance,
-      domainMap: domainMapConsolidated 
+      compliance: consolidatedCompliance
     };
   };
-
-  const consolidatedData = chartData.domains && chartData.compliance 
-    ? consolidateDomains(chartData.domains, chartData.compliance, chartData.domainMap)
-    : { domains: [], compliance: [] };
 
   if (loading) {
     return (
@@ -266,7 +138,7 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
     );
   }
 
-  if (consolidatedData.domains.length === 0) {
+  if (chartData.domains.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5">
         <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900 mb-3">
@@ -323,7 +195,9 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
         Compliance by Domain
       </h3>
       
-      {/* Desktop Table View - Reduced Size */}
+      
+      
+      {/* Desktop Table View */}
       <div className="hidden sm:block">
         <table className="w-full divide-y divide-gray-200">
           <thead className="bg-[#ff0099]">
@@ -337,8 +211,8 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
             </tr>
           </thead>
           <tbody className="bg-white divide-y divide-gray-200">
-            {consolidatedData.domains.map((domain, index) => {
-              const percentage = consolidatedData.compliance[index] || 0;
+            {chartData.domains.map((domain, index) => {
+              const percentage = chartData.compliance[index] || 0;
               const emoji = getDomainEmoji(domain);
               return (
                 <tr key={index} className="hover:bg-gray-50 transition-colors">
@@ -376,8 +250,8 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
 
       {/* Mobile Card View */}
       <div className="sm:hidden space-y-2">
-        {consolidatedData.domains.map((domain, index) => {
-          const percentage = consolidatedData.compliance[index] || 0;
+        {chartData.domains.map((domain, index) => {
+          const percentage = chartData.compliance[index] || 0;
           const emoji = getDomainEmoji(domain);
           return (
             <div key={index} className="bg-gray-50 rounded-lg p-2.5">
