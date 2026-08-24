@@ -1,5 +1,9 @@
 import { supabase } from './supabase'
 
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
 // Get region ID from region name
 const getRegionId = async (regionName) => {
   if (!regionName) return null;
@@ -21,22 +25,401 @@ const getRegionId = async (regionName) => {
   }
 }
 
-// Determine occurrence status based on due date - UPDATED for new status flow
-const determineOccurrenceStatus = (dueDate) => {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const dueDateObj = new Date(dueDate);
-  dueDateObj.setHours(0, 0, 0, 0);
-  const diffDays = Math.ceil((dueDateObj - today) / (1000 * 60 * 60 * 24));
-  
-  // New status flow: Open (default), Submitted/Under Review, Closed
-  if (diffDays < 0) return 'Overdue';
-  if (diffDays === 0) return 'Due Today';
-  if (diffDays <= 7) return 'Pending';
-  return 'In Progress';
+// Get region name from region ID
+const getRegionName = async (regionId) => {
+  if (!regionId) return null;
+  try {
+    const { data, error } = await supabase
+      .from('regions')
+      .select('name')
+      .eq('id', regionId)
+      .single();
+    
+    if (error) {
+      console.error('Error getting region name:', error);
+      return null;
+    }
+    return data?.name || null;
+  } catch (error) {
+    console.error('Error getting region name:', error);
+    return null;
+  }
 }
 
-// Generate occurrences for a cyclic obligation - UPDATED with Open as default status
+// ============================================================
+// OBLIGATION FETCHING
+// ============================================================
+
+export const getObligations = async (
+  filters = {},
+  userRegion = null,
+  isAdmin = false
+) => {
+  try {
+    console.log('🔍 getObligations called with:', { filters, userRegion, isAdmin });
+
+    // ---------------------------------------------------------
+    // 1. GET USER REGION ID
+    // ---------------------------------------------------------
+    let userRegionId = null;
+    if (!isAdmin && userRegion) {
+      userRegionId = await getRegionId(userRegion);
+      console.log(`👤 User region: ${userRegion} (ID: ${userRegionId})`);
+    }
+
+    // ---------------------------------------------------------
+    // 2. CHECK IF MONTH FILTER IS ACTIVE
+    // ---------------------------------------------------------
+    const monthValue = filters.month || '';
+    const yearValue = filters.year || '';
+    
+    const hasMonthFilter = monthValue !== '' && monthValue !== 'all' && 
+                           yearValue !== '' && yearValue !== 'all';
+    
+    console.log(`📅 Month filter active: ${hasMonthFilter}, Month: ${monthValue}, Year: ${yearValue}`);
+
+    // ---------------------------------------------------------
+    // 3. QUERY compliance_progress
+    // ---------------------------------------------------------
+    let progressQuery = supabase
+      .from("compliance_progress")
+      .select(`
+        id,
+        obligation_id,
+        region_id,
+        occurrence_date,
+        calculated_due_date,
+        status,
+        evidence_id,
+        uploaded_by,
+        updated_by,
+        comments,
+        created_at,
+        updated_at
+      `);
+
+    if (!isAdmin && userRegionId) {
+      progressQuery = progressQuery.eq("region_id", userRegionId);
+    }
+
+    // ---------------------------------------------------------
+    // 4. APPLY MONTH/YEAR FILTERS IF PRESENT
+    // ---------------------------------------------------------
+    if (hasMonthFilter) {
+      const year = parseInt(yearValue);
+      const month = parseInt(monthValue);
+      if (!isNaN(year) && !isNaN(month)) {
+        const startDate = new Date(year, month - 1, 1);
+        const endDate = new Date(year, month, 0);
+        const formatDate = (date) => date.toISOString().split("T")[0];
+        progressQuery = progressQuery
+          .gte("occurrence_date", formatDate(startDate))
+          .lte("occurrence_date", formatDate(endDate));
+        console.log(`📅 Filtering by month: ${month}/${year}`);
+      }
+    } else if (yearValue !== '' && yearValue !== 'all') {
+      const year = parseInt(yearValue);
+      if (!isNaN(year)) {
+        const startDate = `${year}-01-01`;
+        const endDate = `${year}-12-31`;
+        progressQuery = progressQuery
+          .gte("occurrence_date", startDate)
+          .lte("occurrence_date", endDate);
+        console.log(`📅 Filtering by year: ${year}`);
+      }
+    }
+
+    progressQuery = progressQuery.order("occurrence_date", { ascending: false });
+
+    const { data: progressData, error: progressError } = await progressQuery;
+
+    if (progressError) {
+      throw progressError;
+    }
+
+    console.log(`📊 Found ${progressData?.length || 0} progress records`);
+
+    if (!progressData || progressData.length === 0) {
+      return { data: [], error: null };
+    }
+
+    // ---------------------------------------------------------
+    // 5. Get unique obligation_ids from progress records
+    // ---------------------------------------------------------
+    const obligationIds = [...new Set(progressData.map(p => p.obligation_id))];
+    console.log(`📋 Found ${obligationIds.length} unique obligation IDs in progress`);
+
+    // ---------------------------------------------------------
+    // 6. GET OBLIGATION DETAILS for these IDs
+    // ---------------------------------------------------------
+    let obligationQuery = supabase
+      .from("compliance_obligations")
+      .select("*")
+      .in("obligation_id", obligationIds)
+      .order("obligation_id", { ascending: true });
+
+    if (filters.domain && filters.domain !== "all") {
+      obligationQuery = obligationQuery.eq("domain", filters.domain);
+    }
+
+    if (filters.frequency && filters.frequency !== "all") {
+      obligationQuery = obligationQuery.eq("frequency", filters.frequency);
+    }
+
+    if (filters.obligation_type && filters.obligation_type !== "all") {
+      obligationQuery = obligationQuery.eq("obligation_type", filters.obligation_type);
+    }
+
+    if (filters.search) {
+      const search = filters.search.trim();
+      if (search) {
+        obligationQuery = obligationQuery.or(
+          `obligation_name.ilike.%${search}%,` +
+          `description.ilike.%${search}%,` +
+          `obligation_id.ilike.%${search}%`
+        );
+      }
+    }
+
+    const { data: obligations, error: obligationsError } = await obligationQuery;
+
+    if (obligationsError) {
+      throw obligationsError;
+    }
+
+    console.log(`📋 Found ${obligations?.length || 0} obligation details`);
+
+    if (!obligations || obligations.length === 0) {
+      return { data: [], error: null };
+    }
+
+    // ---------------------------------------------------------
+    // 7. Create a map of obligation details by obligation_id
+    // ---------------------------------------------------------
+    const obligationMap = {};
+    obligations.forEach(obligation => {
+      obligationMap[obligation.obligation_id] = obligation;
+    });
+
+    // ---------------------------------------------------------
+    // 8. BUILD FINAL DATA
+    // ---------------------------------------------------------
+    let processedData = [];
+
+    if (hasMonthFilter) {
+      console.log(`📋 Month filter active (${monthValue}/${yearValue}) - Showing UNIQUE obligations for this month`);
+      
+      const latestProgressMap = {};
+      progressData.forEach(progress => {
+        if (!latestProgressMap[progress.obligation_id]) {
+          latestProgressMap[progress.obligation_id] = progress;
+        }
+      });
+
+      processedData = obligations.map(obligation => {
+        const latestProgress = latestProgressMap[obligation.obligation_id] || null;
+        const status = latestProgress?.status || 'Open';
+
+        return {
+          ...obligation,
+          current_status: status,
+          progress_id: latestProgress?.id || null,
+          progress_status: latestProgress?.status || null,
+          progress_comments: latestProgress?.comments || null,
+          progress_uploaded_by: latestProgress?.uploaded_by || null,
+          progress_updated_by: latestProgress?.updated_by || null,
+          has_progress: !!latestProgress,
+          occurrence_date: latestProgress?.occurrence_date || null,
+          calculated_due_date: latestProgress?.calculated_due_date || null,
+          region_id: latestProgress?.region_id || null,
+          progressRecords: latestProgress ? [latestProgress] : [],
+          latestProgress: latestProgress,
+          _status: status,
+          _frequency: obligation.frequency,
+          _domain: obligation.domain,
+          _obligation_name: obligation.obligation_name,
+          _obligation_id: obligation.obligation_id,
+          _description: obligation.description
+        };
+      });
+
+      console.log(`📊 Showing ${processedData.length} UNIQUE obligations for ${monthValue}/${yearValue}`);
+
+    } else {
+      console.log('📋 No filter - Showing ALL progress records (duplicates allowed)');
+      
+      processedData = progressData.map(progress => {
+        const obligation = obligationMap[progress.obligation_id] || {};
+        
+        return {
+          ...obligation,
+          progress_id: progress.id,
+          progress_status: progress.status,
+          progress_comments: progress.comments,
+          progress_uploaded_by: progress.uploaded_by,
+          progress_updated_by: progress.updated_by,
+          occurrence_date: progress.occurrence_date,
+          calculated_due_date: progress.calculated_due_date,
+          region_id: progress.region_id,
+          progress_created_at: progress.created_at,
+          progress_updated_at: progress.updated_at,
+          evidence_id: progress.evidence_id,
+          current_status: progress.status,
+          _status: progress.status,
+          _frequency: obligation.frequency,
+          _domain: obligation.domain,
+          _obligation_name: obligation.obligation_name,
+          _obligation_id: obligation.obligation_id,
+          _description: obligation.description,
+          _progress: progress
+        };
+      });
+
+      console.log(`📊 Showing ${processedData.length} progress records (including duplicates across months)`);
+    }
+
+    // ---------------------------------------------------------
+    // 9. APPLY STATUS FILTER (in-memory)
+    // ---------------------------------------------------------
+    let finalData = processedData;
+    if (filters.status && filters.status !== 'all') {
+      finalData = finalData.filter(item => {
+        const status = item.current_status || 'Open';
+        return status === filters.status;
+      });
+      console.log(`📊 Filtered by status: ${filters.status}, ${finalData.length} remaining`);
+    }
+
+    if (finalData.length > 0) {
+      console.log('📋 Sample final data:');
+      finalData.slice(0, 5).forEach((item, idx) => {
+        console.log(`  ${idx + 1}. ${item.obligation_id} - ${item.obligation_name} - Due: ${item.calculated_due_date} - Status: ${item.current_status}`);
+      });
+    }
+
+    console.log(`✅ Returning ${finalData.length} records`);
+    return { data: finalData, error: null };
+
+  } catch (error) {
+    console.error("❌ Error fetching obligations:", error);
+    return { data: null, error };
+  }
+};
+
+// Get single obligation with details (by UUID)
+export const getObligationById = async (id, userRegion = null, isAdmin = false) => {
+  try {
+    const { data, error } = await supabase
+      .from('compliance_obligations')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    if (!data) return { data: null, error: null };
+
+    let regionId = null;
+    if (!isAdmin && userRegion) {
+      regionId = await getRegionId(userRegion);
+    }
+
+    let progressQuery = supabase
+      .from('compliance_progress')
+      .select('*')
+      .eq('obligation_id', data.obligation_id);
+
+    if (!isAdmin && regionId) {
+      progressQuery = progressQuery.eq('region_id', regionId);
+    }
+
+    const { data: progressData, error: progressError } = await progressQuery;
+    if (!progressError) {
+      data.compliance_progress = progressData || [];
+      
+      const latestProgress = progressData && progressData.length > 0 
+        ? progressData.reduce((latest, current) => {
+            return new Date(current.occurrence_date) > new Date(latest.occurrence_date) ? current : latest;
+          })
+        : null;
+      
+      if (latestProgress) {
+        data.current_status = latestProgress.status;
+        data.progress_id = latestProgress.id;
+        data.progress_status = latestProgress.status;
+        data.progress_comments = latestProgress.comments;
+        data.progress_uploaded_by = latestProgress.uploaded_by;
+        data.progress_updated_by = latestProgress.updated_by;
+        data.occurrence_date = latestProgress.occurrence_date;
+        data.calculated_due_date = latestProgress.calculated_due_date;
+      }
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error fetching obligation by ID:', error);
+    return { data: null, error };
+  }
+}
+
+// Get obligation by obligation_id (MS-001 format)
+export const getObligationByObligationId = async (obligationId, userRegion = null, isAdmin = false) => {
+  try {
+    const { data, error } = await supabase
+      .from('compliance_obligations')
+      .select('*')
+      .eq('obligation_id', obligationId)
+      .single();
+
+    if (error) throw error;
+    if (!data) return { data: null, error: null };
+
+    let regionId = null;
+    if (!isAdmin && userRegion) {
+      regionId = await getRegionId(userRegion);
+    }
+
+    let progressQuery = supabase
+      .from('compliance_progress')
+      .select('*')
+      .eq('obligation_id', data.obligation_id);
+
+    if (!isAdmin && regionId) {
+      progressQuery = progressQuery.eq('region_id', regionId);
+    }
+
+    const { data: progressData, error: progressError } = await progressQuery;
+    if (!progressError) {
+      data.compliance_progress = progressData || [];
+      
+      const latestProgress = progressData && progressData.length > 0 
+        ? progressData.reduce((latest, current) => {
+            return new Date(current.occurrence_date) > new Date(latest.occurrence_date) ? current : latest;
+          })
+        : null;
+      
+      if (latestProgress) {
+        data.current_status = latestProgress.status;
+        data.progress_id = latestProgress.id;
+        data.progress_status = latestProgress.status;
+        data.progress_comments = latestProgress.comments;
+        data.progress_uploaded_by = latestProgress.uploaded_by;
+        data.progress_updated_by = latestProgress.updated_by;
+        data.occurrence_date = latestProgress.occurrence_date;
+        data.calculated_due_date = latestProgress.calculated_due_date;
+      }
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error fetching obligation by obligation_id:', error);
+    return { data: null, error };
+  }
+}
+
+// ============================================================
+// OCCURRENCE MANAGEMENT
+// ============================================================
+
 export const generateOccurrences = async (obligationId, regionId, frequency, dueDate, monthsToGenerate = 12) => {
   try {
     const dueDateObj = new Date(dueDate);
@@ -44,29 +427,27 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
     const startDate = new Date();
     const occurrences = [];
 
-    // Determine month increment based on frequency
     let monthIncrement = 1;
     if (frequency === 'Quarterly') monthIncrement = 3;
     else if (frequency === 'Bi-Annual') monthIncrement = 6;
     else if (frequency === 'Annual') monthIncrement = 12;
     else if (frequency === 'Monthly') monthIncrement = 1;
     else {
-      // For non-cyclic frequencies, generate just one occurrence with status 'Open'
       const dueDateStr = dueDateObj.toISOString().split('T')[0];
       const instanceDate = new Date(dueDateObj.getFullYear(), dueDateObj.getMonth(), 1);
       
       occurrences.push({
         obligation_id: obligationId,
         region_id: regionId,
-        instance_date: instanceDate.toISOString().split('T')[0],
-        due_date: dueDateStr,
-        status: 'Open', // Default status for new obligations
+        occurrence_date: instanceDate.toISOString().split('T')[0],
+        calculated_due_date: dueDateStr,
+        status: 'Open',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
       
       const { data, error } = await supabase
-        .from('obligation_occurrences')
+        .from('compliance_progress')
         .insert(occurrences)
         .select();
 
@@ -74,7 +455,6 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
       return { data, error: null };
     }
 
-    // Generate occurrences for cyclic obligations - all start with 'Open' status
     for (let i = 0; i < monthsToGenerate; i++) {
       const occurrenceDate = new Date(
         startDate.getFullYear(),
@@ -82,7 +462,6 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
         1
       );
       
-      // If we've gone past the due date, adjust
       if (occurrenceDate < dueDateObj && i === 0) {
         occurrenceDate.setFullYear(dueDateObj.getFullYear());
         occurrenceDate.setMonth(dueDateObj.getMonth());
@@ -110,17 +489,16 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
       occurrences.push({
         obligation_id: obligationId,
         region_id: regionId,
-        instance_date: instanceDate.toISOString().split('T')[0],
-        due_date: dueDateForOccurrence.toISOString().split('T')[0],
-        status: 'Open', // Default status for new occurrences
+        occurrence_date: instanceDate.toISOString().split('T')[0],
+        calculated_due_date: dueDateForOccurrence.toISOString().split('T')[0],
+        status: 'Open',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
     }
 
-    // Insert occurrences
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .insert(occurrences)
       .select();
 
@@ -132,287 +510,18 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
   }
 }
 
-// Get all obligations with their progress for the user's region
-export const getObligations = async (filters = {}, userRegion = null, isAdmin = false) => {
-  try {
-    let query = supabase
-      .from('obligations')
-      .select(`
-        *,
-        policy:policies(*),
-        obligation_progress!left(
-          id,
-          status,
-          completed_at,
-          started_at,
-          last_updated_at,
-          comments,
-          region_id
-        )
-      `)
-
-    if (filters.domain && filters.domain !== 'all') {
-      query = query.eq('domain', filters.domain)
-    }
-    
-    if (filters.frequency && filters.frequency !== 'all') {
-      query = query.eq('frequency', filters.frequency)
-    }
-
-    if (filters.obligation_type) {
-      query = query.eq('obligation_type', filters.obligation_type)
-    }
-    
-    if (filters.search) {
-      query = query.or(`name.ilike.%${filters.search}%,description.ilike.%${filters.search}%,obligation_id.ilike.%${filters.search}%`)
-    }
-
-    const { data, error } = await query
-    if (error) throw error
-
-    let userRegionId = null;
-    if (!isAdmin && userRegion) {
-      userRegionId = await getRegionId(userRegion);
-    }
-
-    let processedData = data
-      .map(obligation => {
-        if (!isAdmin && userRegionId) {
-          const progressForRegion = obligation.obligation_progress?.find(
-            p => p.region_id === userRegionId
-          );
-          
-          if (!progressForRegion) return null;
-          
-          return {
-            ...obligation,
-            current_status: progressForRegion.status,
-            progress_id: progressForRegion.id || null,
-            progress_status: progressForRegion.status || null,
-            completed_at: progressForRegion.completed_at || null,
-            started_at: progressForRegion.started_at || null,
-            last_updated_at: progressForRegion.last_updated_at || null,
-            progress_comments: progressForRegion.comments || null,
-            user_region_id: userRegionId,
-            has_progress: true,
-          };
-        }
-
-        const progress = obligation.obligation_progress?.[0] || null;
-        const status = progress?.status || obligation.current_status || 'Open';
-        
-        return {
-          ...obligation,
-          current_status: status,
-          progress_id: progress?.id || null,
-          progress_status: progress?.status || null,
-          completed_at: progress?.completed_at || null,
-          started_at: progress?.started_at || null,
-          last_updated_at: progress?.last_updated_at || null,
-          progress_comments: progress?.comments || null,
-          has_progress: !!progress,
-        };
-      })
-      .filter(obligation => obligation !== null);
-
-    if (filters.status && filters.status !== 'all') {
-      processedData = processedData.filter(o => o.current_status === filters.status);
-    }
-
-    return { data: processedData, error: null }
-  } catch (error) {
-    console.error('Error fetching obligations:', error)
-    return { data: null, error }
-  }
-}
-
-// Get single obligation with details (by UUID) including progress and occurrences
-export const getObligationById = async (id, userRegion = null, isAdmin = false) => {
-  try {
-    const { data, error } = await supabase
-      .from('obligations')
-      .select(`
-        *,
-        policy:policies(*),
-        obligation_progress!left(
-          id,
-          status,
-          completed_at,
-          started_at,
-          last_updated_at,
-          comments,
-          region_id
-        ),
-        obligation_occurrences!left(
-          id,
-          instance_date,
-          due_date,
-          status,
-          completed_at,
-          started_at,
-          evidence_id,
-          comments,
-          region_id
-        )
-      `)
-      .eq('id', id)
-      .single()
-
-    if (error) throw error
-
-    if (!data) return { data: null, error: null }
-
-    let regionId = null;
-    if (!isAdmin && userRegion) {
-      regionId = await getRegionId(userRegion);
-    }
-
-    // Filter occurrences by region
-    if (regionId && data.obligation_occurrences) {
-      data.obligation_occurrences = data.obligation_occurrences.filter(
-        o => o.region_id === regionId
-      );
-      // Sort by instance_date descending
-      data.obligation_occurrences.sort((a, b) => 
-        new Date(b.instance_date) - new Date(a.instance_date)
-      );
-    }
-
-    if (!isAdmin && userRegion && data) {
-      if (regionId && data.obligation_progress) {
-        const regionProgress = data.obligation_progress.find(
-          p => p.region_id === regionId
-        );
-        if (regionProgress) {
-          data.current_status = regionProgress.status;
-          data.progress_id = regionProgress.id;
-          data.progress_status = regionProgress.status;
-          data.completed_at = regionProgress.completed_at;
-          data.started_at = regionProgress.started_at;
-          data.last_updated_at = regionProgress.last_updated_at;
-          data.progress_comments = regionProgress.comments;
-        }
-      }
-    } else if (isAdmin && data) {
-      const progress = data.obligation_progress?.[0] || null;
-      if (progress) {
-        data.current_status = progress.status;
-        data.progress_id = progress.id;
-        data.progress_status = progress.status;
-        data.completed_at = progress.completed_at;
-        data.started_at = progress.started_at;
-        data.last_updated_at = progress.last_updated_at;
-        data.progress_comments = progress.comments;
-      }
-    }
-
-    return { data, error: null }
-  } catch (error) {
-    console.error('Error fetching obligation by ID:', error)
-    return { data: null, error }
-  }
-}
-
-// Get obligation by obligation_id (MS-001 format) with progress and occurrences
-export const getObligationByObligationId = async (obligationId, userRegion = null, isAdmin = false) => {
-  try {
-    const { data, error } = await supabase
-      .from('obligations')
-      .select(`
-        *,
-        policy:policies(*),
-        obligation_progress!left(
-          id,
-          status,
-          completed_at,
-          started_at,
-          last_updated_at,
-          comments,
-          region_id
-        ),
-        obligation_occurrences!left(
-          id,
-          instance_date,
-          due_date,
-          status,
-          completed_at,
-          started_at,
-          evidence_id,
-          comments,
-          region_id
-        )
-      `)
-      .eq('obligation_id', obligationId)
-      .single()
-
-    if (error) throw error
-
-    if (!data) return { data: null, error: null }
-
-    let regionId = null;
-    if (!isAdmin && userRegion) {
-      regionId = await getRegionId(userRegion);
-    }
-
-    // Filter occurrences by region
-    if (regionId && data.obligation_occurrences) {
-      data.obligation_occurrences = data.obligation_occurrences.filter(
-        o => o.region_id === regionId
-      );
-      // Sort by instance_date descending
-      data.obligation_occurrences.sort((a, b) => 
-        new Date(b.instance_date) - new Date(a.instance_date)
-      );
-    }
-
-    if (!isAdmin && userRegion && data) {
-      if (regionId && data.obligation_progress) {
-        const regionProgress = data.obligation_progress.find(
-          p => p.region_id === regionId
-        );
-        if (regionProgress) {
-          data.current_status = regionProgress.status;
-          data.progress_id = regionProgress.id;
-          data.progress_status = regionProgress.status;
-          data.completed_at = regionProgress.completed_at;
-          data.started_at = regionProgress.started_at;
-          data.last_updated_at = regionProgress.last_updated_at;
-          data.progress_comments = regionProgress.comments;
-        }
-      }
-    } else if (isAdmin && data) {
-      const progress = data.obligation_progress?.[0] || null;
-      if (progress) {
-        data.current_status = progress.status;
-        data.progress_id = progress.id;
-        data.progress_status = progress.status;
-        data.completed_at = progress.completed_at;
-        data.started_at = progress.started_at;
-        data.last_updated_at = progress.last_updated_at;
-        data.progress_comments = progress.comments;
-      }
-    }
-
-    return { data, error: null }
-  } catch (error) {
-    console.error('Error fetching obligation by obligation_id:', error)
-    return { data: null, error }
-  }
-}
-
-// Get occurrences for a specific month
 export const getOccurrencesForMonth = async (regionId, year, month) => {
   try {
     const startDate = new Date(year, month, 1).toISOString().split('T')[0];
     const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .select(`
         *,
-        obligation:obligations(
+        obligation:compliance_obligations(
           obligation_id,
-          name,
+          obligation_name,
           domain,
           frequency,
           description,
@@ -422,15 +531,15 @@ export const getOccurrencesForMonth = async (regionId, year, month) => {
           evidence_required,
           evidence_type,
           mandatory,
-          region,
+          policy,
           clause,
           due_date_rule
         )
       `)
       .eq('region_id', regionId)
-      .gte('instance_date', startDate)
-      .lte('instance_date', endDate)
-      .order('due_date', { ascending: true });
+      .gte('occurrence_date', startDate)
+      .lte('occurrence_date', endDate)
+      .order('occurrence_date', { ascending: true });
 
     if (error) throw error;
     return { data, error: null };
@@ -440,13 +549,10 @@ export const getOccurrencesForMonth = async (regionId, year, month) => {
   }
 }
 
-// Update occurrence status - UPDATED for new status flow
-export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = null, comment = '') => {
+export const updateOccurrenceStatus = async (progressId, status, evidenceId = null, comment = '') => {
   try {
-    // Validate status - only allow: 'Open', 'Submitted/Under Review', 'Closed'
     const validStatuses = ['Open', 'Submitted/Under Review', 'Closed'];
     if (!validStatuses.includes(status)) {
-      // Map old statuses to new ones
       if (status === 'Completed' || status === 'Approved') {
         status = 'Closed';
       } else if (status === 'Submitted' || status === 'Under Review') {
@@ -461,12 +567,6 @@ export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = 
       updated_at: new Date().toISOString()
     };
 
-    if (status === 'Closed') {
-      updateData.completed_at = new Date().toISOString();
-    } else if (status === 'Submitted/Under Review') {
-      updateData.started_at = new Date().toISOString();
-    }
-
     if (evidenceId) {
       updateData.evidence_id = evidenceId;
     }
@@ -476,9 +576,9 @@ export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = 
     }
 
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .update(updateData)
-      .eq('id', occurrenceId)
+      .eq('id', progressId)
       .select();
 
     if (error) throw error;
@@ -490,20 +590,19 @@ export const updateOccurrenceStatus = async (occurrenceId, status, evidenceId = 
 }
 
 // ============================================================
-// NEW APPROVAL FUNCTIONS
+// APPROVAL FUNCTIONS - FIXED FOR AMBIGUOUS RELATIONSHIP
 // ============================================================
 
-// Get occurrences pending approval (Submitted/Under Review)
-// Get occurrences pending approval (Submitted/Under Review) - FIXED to include evidence
 export const getPendingApprovals = async (userRegion = null, isAdmin = false) => {
   try {
-    let query = supabase
-      .from('obligation_occurrences')
+    // First, get the progress records with status 'Submitted/Under Review'
+    let progressQuery = supabase
+      .from('compliance_progress')
       .select(`
         *,
-        obligation:obligations(
+        obligation:compliance_obligations(
           obligation_id,
-          name,
+          obligation_name,
           domain,
           frequency,
           description,
@@ -513,51 +612,76 @@ export const getPendingApprovals = async (userRegion = null, isAdmin = false) =>
           evidence_required,
           evidence_type,
           mandatory,
-          region,
+          policy,
           clause,
           due_date_rule
-        ),
-        evidence:evidence!evidence_occurrence_id_fkey(
-          id,
-          file_name,
-          file_url,
-          file_type,
-          file_size,
-          uploaded_at,
-          uploaded_by,
-          status
         )
       `)
       .eq('status', 'Submitted/Under Review')
       .order('updated_at', { ascending: false });
 
-    // Filter by region for non-admin users
     if (!isAdmin && userRegion) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
-        query = query.eq('region_id', regionId);
+        progressQuery = progressQuery.eq('region_id', regionId);
       }
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return { data, error: null };
+    const { data: progressData, error: progressError } = await progressQuery;
+
+    if (progressError) {
+      throw progressError;
+    }
+
+    if (!progressData || progressData.length === 0) {
+      return { data: [], error: null };
+    }
+
+    // Now, separately fetch evidence for each progress record
+    const evidenceIds = progressData
+      .map(p => p.evidence_id)
+      .filter(id => id !== null);
+
+    let evidenceMap = {};
+    if (evidenceIds.length > 0) {
+      const { data: evidenceData, error: evidenceError } = await supabase
+        .from('evidence')
+        .select('*')
+        .in('id', evidenceIds);
+
+      if (!evidenceError && evidenceData) {
+        evidenceData.forEach(e => {
+          evidenceMap[e.id] = e;
+        });
+      }
+    }
+
+    // Combine progress with evidence
+    const combinedData = progressData.map(progress => {
+      const evidence = progress.evidence_id ? evidenceMap[progress.evidence_id] : null;
+      return {
+        ...progress,
+        evidence: evidence
+      };
+    });
+
+    return { data: combinedData, error: null };
   } catch (error) {
     console.error('Error fetching pending approvals:', error);
     return { data: null, error };
   }
 };
 
-// Get approved occurrences (Closed)
 export const getApprovedOccurrences = async (userRegion = null, isAdmin = false) => {
   try {
-    let query = supabase
-      .from('obligation_occurrences')
+    // First, get the progress records with status 'Closed'
+    let progressQuery = supabase
+      .from('compliance_progress')
       .select(`
         *,
-        obligation:obligations(
+        obligation:compliance_obligations(
           obligation_id,
-          name,
+          obligation_name,
           domain,
           frequency,
           description,
@@ -567,64 +691,88 @@ export const getApprovedOccurrences = async (userRegion = null, isAdmin = false)
           evidence_required,
           evidence_type,
           mandatory,
-          region,
+          policy,
           clause,
           due_date_rule
-        ),
-        evidence:evidence(
-          id,
-          file_name,
-          file_url,
-          file_type,
-          file_size,
-          uploaded_at,
-          uploaded_by
         )
       `)
       .eq('status', 'Closed')
       .order('updated_at', { ascending: false });
 
-    // Filter by region for non-admin users
     if (!isAdmin && userRegion) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
-        query = query.eq('region_id', regionId);
+        progressQuery = progressQuery.eq('region_id', regionId);
       }
     }
 
-    const { data, error } = await query;
-    if (error) throw error;
-    return { data, error: null };
+    const { data: progressData, error: progressError } = await progressQuery;
+
+    if (progressError) {
+      throw progressError;
+    }
+
+    if (!progressData || progressData.length === 0) {
+      return { data: [], error: null };
+    }
+
+    // Now, separately fetch evidence for each progress record
+    const evidenceIds = progressData
+      .map(p => p.evidence_id)
+      .filter(id => id !== null);
+
+    let evidenceMap = {};
+    if (evidenceIds.length > 0) {
+      const { data: evidenceData, error: evidenceError } = await supabase
+        .from('evidence')
+        .select('*')
+        .in('id', evidenceIds);
+
+      if (!evidenceError && evidenceData) {
+        evidenceData.forEach(e => {
+          evidenceMap[e.id] = e;
+        });
+      }
+    }
+
+    // Combine progress with evidence
+    const combinedData = progressData.map(progress => {
+      const evidence = progress.evidence_id ? evidenceMap[progress.evidence_id] : null;
+      return {
+        ...progress,
+        evidence: evidence
+      };
+    });
+
+    return { data: combinedData, error: null };
   } catch (error) {
     console.error('Error fetching approved occurrences:', error);
     return { data: null, error };
   }
 };
 
-// Approve an occurrence (change status to Closed)
-export const approveOccurrence = async (occurrenceId, comment = '') => {
+export const approveOccurrence = async (progressId, comment = '') => {
   try {
     const user = await supabase.auth.getUser();
     if (user.error) throw user.error;
 
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .update({
         status: 'Closed',
         comments: comment || 'Approved by admin',
-        updated_at: new Date().toISOString(),
-        completed_at: new Date().toISOString()
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
       })
-      .eq('id', occurrenceId)
+      .eq('id', progressId)
       .select();
 
     if (error) throw error;
 
-    // Add to activity history
     if (data && data[0]) {
       await addActivityHistory(
         data[0].obligation_id,
-        occurrenceId,
+        progressId,
         `Occurrence approved and closed`,
         `Approved by ${user.data.user.email}`
       );
@@ -637,31 +785,28 @@ export const approveOccurrence = async (occurrenceId, comment = '') => {
   }
 };
 
-// Reject an occurrence (change status back to Open)
-export const rejectOccurrence = async (occurrenceId, reason = '') => {
+export const rejectOccurrence = async (progressId, reason = '') => {
   try {
     const user = await supabase.auth.getUser();
     if (user.error) throw user.error;
 
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .update({
         status: 'Open',
         comments: reason || 'Rejected, please resubmit',
-        updated_at: new Date().toISOString(),
-        completed_at: null,
-        started_at: null
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
       })
-      .eq('id', occurrenceId)
+      .eq('id', progressId)
       .select();
 
     if (error) throw error;
 
-    // Add to activity history
     if (data && data[0]) {
       await addActivityHistory(
         data[0].obligation_id,
-        occurrenceId,
+        progressId,
         `Occurrence rejected`,
         `Rejected by ${user.data.user.email}: ${reason}`
       );
@@ -674,17 +819,15 @@ export const rejectOccurrence = async (occurrenceId, reason = '') => {
   }
 };
 
-// Submit occurrence for review (when evidence is uploaded)
-// Submit occurrence for review (when evidence is uploaded)
-export const submitOccurrenceForReview = async (occurrenceId, evidenceId = null) => {
+export const submitOccurrenceForReview = async (progressId, evidenceId = null) => {
   try {
     const user = await supabase.auth.getUser();
     if (user.error) throw user.error;
 
     const updateData = {
       status: 'Submitted/Under Review',
-      updated_at: new Date().toISOString(),
-      started_at: new Date().toISOString()
+      updated_by: user.data.user.id,
+      updated_at: new Date().toISOString()
     };
 
     if (evidenceId) {
@@ -692,20 +835,17 @@ export const submitOccurrenceForReview = async (occurrenceId, evidenceId = null)
     }
 
     const { data, error } = await supabase
-      .from('obligation_occurrences')
+      .from('compliance_progress')
       .update(updateData)
-      .eq('id', occurrenceId)
+      .eq('id', progressId)
       .select();
 
     if (error) throw error;
 
-    console.log('Occurrence submitted for review:', data);
-
-    // Add to activity history
     if (data && data[0]) {
       await addActivityHistory(
         data[0].obligation_id,
-        occurrenceId,
+        progressId,
         `Evidence uploaded - Submitted for review`,
         `Submitted by ${user.data.user.email}`
       );
@@ -719,12 +859,10 @@ export const submitOccurrenceForReview = async (occurrenceId, evidenceId = null)
 };
 
 // ============================================================
-// END APPROVAL FUNCTIONS
+// EVIDENCE FUNCTIONS
 // ============================================================
 
-// Upload evidence for a specific occurrence - UPDATED to submit for review
-// Upload evidence for a specific occurrence - FIXED
-export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligationId, regionId, userRegion = null, isAdmin = false) => {
+export const uploadEvidenceForOccurrence = async (file, progressId, obligationId, regionId, userRegion = null, isAdmin = false) => {
   try {
     const user = await supabase.auth.getUser();
     if (user.error) throw user.error;
@@ -733,27 +871,37 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
       throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
     }
 
-    const fileName = `${Date.now()}_${file.name}`;
-    const filePath = `evidence/${obligationId}/${occurrenceId}/${fileName}`;
+    // Get the UUID from compliance_obligations for the obligation_id (text)
+    const { data: obligationData, error: obligationError } = await supabase
+      .from('compliance_obligations')
+      .select('id')
+      .eq('obligation_id', obligationId)
+      .single();
 
-    // Upload to storage
+    if (obligationError || !obligationData) {
+      throw new Error(`Obligation with ID "${obligationId}" not found`);
+    }
+
+    const obligationUuid = obligationData.id;
+
+    const fileName = `${Date.now()}_${file.name}`;
+    const filePath = `evidence/${obligationId}/${progressId}/${fileName}`;
+
     const { error: uploadError } = await supabase.storage
       .from('obligation_evidence')
       .upload(filePath, file);
 
     if (uploadError) throw uploadError;
 
-    // Get public URL
     const { data: urlData } = supabase.storage
       .from('obligation_evidence')
       .getPublicUrl(filePath);
 
-    // Save evidence record with occurrence_id
     const { data: evidenceData, error: evidenceError } = await supabase
       .from('evidence')
       .insert({
-        obligation_id: obligationId,
-        occurrence_id: occurrenceId,
+        obligation_id: obligationUuid,
+        occurrence_id: progressId,
         region_id: regionId,
         file_name: file.name,
         file_url: urlData.publicUrl,
@@ -766,17 +914,16 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
 
     if (evidenceError) throw evidenceError;
 
-    // CRITICAL FIX: Update occurrence status to "Submitted/Under Review"
     if (evidenceData && evidenceData[0]) {
       const updateResult = await supabase
-        .from('obligation_occurrences')
+        .from('compliance_progress')
         .update({
           status: 'Submitted/Under Review',
           evidence_id: evidenceData[0].id,
-          updated_at: new Date().toISOString(),
-          started_at: new Date().toISOString()
+          uploaded_by: user.data.user.id,
+          updated_at: new Date().toISOString()
         })
-        .eq('id', occurrenceId)
+        .eq('id', progressId)
         .select();
 
       if (updateResult.error) {
@@ -784,12 +931,9 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
         throw updateResult.error;
       }
 
-      console.log('Occurrence status updated to Submitted/Under Review:', updateResult.data);
-
-      // Add to activity history
       await addActivityHistory(
         obligationId,
-        occurrenceId,
+        progressId,
         `Evidence uploaded - Submitted for review`,
         `Submitted by ${user.data.user.email}`
       );
@@ -802,510 +946,40 @@ export const uploadEvidenceForOccurrence = async (file, occurrenceId, obligation
   }
 };
 
-// Get obligation with full details (instances, evidence, activity, progress, occurrences)
-export const getObligationWithFullDetails = async (obligationId, userRegion = null, isAdmin = false) => {
-  try {
-    const { data: obligation, error: obligationError } = await getObligationByObligationId(obligationId, userRegion, isAdmin)
-    if (obligationError) throw obligationError
-    if (!obligation) return { data: null, error: null }
-
-    const { data: instances } = await getObligationInstances(obligation.id)
-    const { data: evidence } = await getEvidence(obligation.id, userRegion, isAdmin)
-    const { data: activities } = await getActivityHistory(obligation.id)
-
-    return {
-      data: {
-        ...obligation,
-        instances: instances || [],
-        evidence: evidence || [],
-        activities: activities || [],
-        occurrences: obligation.obligation_occurrences || [],
-      },
-      error: null
-    }
-  } catch (error) {
-    console.error('Error fetching full obligation details:', error)
-    return { data: null, error }
-  }
-}
-
-// Update obligation status - Updates both main table and progress table
-export const updateObligationStatus = async (id, status, comment = '', userRegion = null, isAdmin = false) => {
-  try {
-    const { data, error } = await supabase
-      .from('obligations')
-      .update({ 
-        current_status: status,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select()
-
-    if (error) throw error
-
-    if (!isAdmin && userRegion) {
-      const regionId = await getRegionId(userRegion);
-      if (regionId) {
-        let progressStatus = status;
-        if (status !== 'Completed' && status !== 'In Progress' && status !== 'Overdue') {
-          progressStatus = 'In Progress';
-        }
-        
-        const { data: existingProgress } = await supabase
-          .from('obligation_progress')
-          .select('id, status')
-          .eq('obligation_id', id)
-          .eq('region_id', regionId)
-          .single();
-
-        const updateData = {
-          status: progressStatus,
-          last_updated_at: new Date().toISOString(),
-        };
-
-        if (progressStatus === 'Completed') {
-          updateData.completed_at = new Date().toISOString();
-        } else if (progressStatus === 'In Progress' && !existingProgress?.started_at) {
-          updateData.started_at = new Date().toISOString();
-        }
-
-        if (comment) {
-          updateData.comments = comment;
-        }
-
-        if (existingProgress) {
-          const { error: updateError } = await supabase
-            .from('obligation_progress')
-            .update(updateData)
-            .eq('id', existingProgress.id);
-          
-          if (updateError) throw updateError;
-        } else {
-          const { error: insertError } = await supabase
-            .from('obligation_progress')
-            .insert({
-              obligation_id: id,
-              region_id: regionId,
-              status: progressStatus,
-              ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
-              ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
-              ...(comment && { comments: comment }),
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            });
-          
-          if (insertError) throw insertError;
-        }
-      }
-    }
-
-    if (data && data[0]) {
-      await addActivityHistory(
-        data[0].id, 
-        null,
-        `Status updated to ${status}`, 
-        comment
-      )
-    }
-
-    return { data, error: null }
-  } catch (error) {
-    console.error('Error updating obligation status:', error)
-    return { data: null, error }
-  }
-}
-
-// Get region-specific progress for an obligation
-export const getRegionProgress = async (obligationId, regionName) => {
-  try {
-    const regionId = await getRegionId(regionName);
-    if (!regionId) return { data: null, error: null };
-
-    const { data, error } = await supabase
-      .from('obligation_progress')
-      .select('*')
-      .eq('obligation_id', obligationId)
-      .eq('region_id', regionId)
-      .single();
-
-    if (error && error.code !== 'PGRST116') throw error;
-    return { data: data || null, error: null };
-  } catch (error) {
-    console.error('Error fetching region progress:', error);
-    return { data: null, error };
-  }
-}
-
-// Update region progress - Direct update to progress table
-export const updateRegionProgress = async (obligationId, regionName, status, comment = '') => {
-  try {
-    const regionId = await getRegionId(regionName);
-    if (!regionId) {
-      throw new Error(`Region not found for name: ${regionName}`);
-    }
-
-    let progressStatus = status;
-    if (status !== 'Completed' && status !== 'In Progress' && status !== 'Overdue') {
-      progressStatus = 'In Progress';
-    }
-
-    const { data: existingProgress } = await supabase
-      .from('obligation_progress')
-      .select('id, status')
-      .eq('obligation_id', obligationId)
-      .eq('region_id', regionId)
-      .single();
-
-    const updateData = {
-      status: progressStatus,
-      last_updated_at: new Date().toISOString(),
-    };
-
-    if (progressStatus === 'Completed') {
-      updateData.completed_at = new Date().toISOString();
-    } else if (progressStatus === 'In Progress' && !existingProgress?.started_at) {
-      updateData.started_at = new Date().toISOString();
-    }
-
-    if (comment) {
-      updateData.comments = comment;
-    }
-
-    let result;
-    if (existingProgress) {
-      result = await supabase
-        .from('obligation_progress')
-        .update(updateData)
-        .eq('id', existingProgress.id)
-        .select();
-    } else {
-      result = await supabase
-        .from('obligation_progress')
-        .insert({
-          obligation_id: obligationId,
-          region_id: regionId,
-          status: progressStatus,
-          ...(progressStatus === 'Completed' && { completed_at: new Date().toISOString() }),
-          ...(progressStatus === 'In Progress' && { started_at: new Date().toISOString() }),
-          ...(comment && { comments: comment }),
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .select();
-    }
-
-    if (result.error) throw result.error;
-
-    await supabase
-      .from('obligations')
-      .update({
-        current_status: status,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', obligationId);
-
-    return { data: result.data, error: null };
-  } catch (error) {
-    console.error('Error updating region progress:', error);
-    return { data: null, error };
-  }
-}
-
-// Get obligation instances - Generate instances on the fly from obligations
-export const getObligationInstances = async (obligationId) => {
-  try {
-    const { data: obligation, error: obligationError } = await supabase
-      .from('obligations')
-      .select('*')
-      .eq('id', obligationId)
-      .single()
-
-    if (obligationError) throw obligationError
-    if (!obligation) return { data: [], error: null }
-
-    const instances = generateInstancesFromObligation(obligation)
-    
-    return { data: instances, error: null }
-  } catch (error) {
-    console.error('Error fetching obligation instances:', error)
-    return { data: null, error }
-  }
-}
-
-// Helper function to generate instances based on frequency
-const generateInstancesFromObligation = (obligation) => {
-  const instances = []
-  const today = new Date()
-  const frequencies = {
-    'Monthly': 1,
-    'Quarterly': 3,
-    'Bi-Annual': 6,
-    'Annual': 12,
-    'One-Time': 0,
-    'Continuous': 0
-  }
-
-  const monthsToGenerate = frequencies[obligation.frequency] || 1
-  const currentDate = new Date(today)
-  
-  for (let i = 0; i < 6; i++) {
-    const dueDate = new Date(currentDate)
-    if (monthsToGenerate > 0) {
-      dueDate.setMonth(dueDate.getMonth() + (i * monthsToGenerate))
-    } else {
-      if (obligation.due_date_rule) {
-        const parsedDate = new Date(obligation.due_date_rule)
-        if (!isNaN(parsedDate.getTime())) {
-          dueDate.setTime(parsedDate.getTime())
-        } else {
-          dueDate.setMonth(dueDate.getMonth() + 1)
-        }
-      } else {
-        dueDate.setMonth(dueDate.getMonth() + 1)
-      }
-    }
-
-    const diffTime = dueDate - today
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-    
-    if (diffDays > -30) {
-      instances.push({
-        id: `${obligation.id}-${i}`,
-        obligation_id: obligation.id,
-        due_date: dueDate.toISOString().split('T')[0],
-        status: determineInstanceStatus(dueDate, obligation.current_status),
-        comments: '',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-    }
-  }
-
-  instances.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
-  
-  return instances
-}
-
-// Helper function to determine instance status
-const determineInstanceStatus = (dueDate, obligationStatus) => {
-  const today = new Date()
-  const diffTime = dueDate - today
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24))
-
-  if (diffDays < 0) {
-    return 'Overdue'
-  } else if (diffDays === 0) {
-    return 'Due Today'
-  } else if (diffDays <= 7) {
-    return 'Pending'
-  } else {
-    return 'In Progress'
-  }
-}
-
-// Update instance status
-export const updateInstanceStatus = async (instanceId, status, comment = '', userRegion = null, isAdmin = false) => {
-  try {
-    const [obligationId, index] = instanceId.split('-')
-    
-    const result = await updateObligationStatus(obligationId, status, comment, userRegion, isAdmin)
-
-    if (result.data && result.data[0]) {
-      await addActivityHistory(
-        obligationId,
-        instanceId,
-        `Instance status updated to ${status}`,
-        comment
-      )
-    }
-
-    return { 
-      data: [{ 
-        id: instanceId,
-        obligation_id: obligationId,
-        status: status,
-        comments: comment,
-        updated_at: new Date().toISOString()
-      }], 
-      error: null 
-    }
-  } catch (error) {
-    console.error('Error updating instance status:', error)
-    return { data: null, error }
-  }
-}
-
-// Submit instance for review
-export const submitInstance = async (instanceId, userRegion = null, isAdmin = false) => {
-  try {
-    const user = await supabase.auth.getUser()
-    if (user.error) throw user.error
-
-    const [obligationId, index] = instanceId.split('-')
-    
-    const result = await updateObligationStatus(obligationId, 'Submitted', 'Submitted for review', userRegion, isAdmin)
-
-    if (result.data && result.data[0]) {
-      await addActivityHistory(
-        obligationId,
-        instanceId,
-        'Instance submitted for review',
-        `Submitted by ${user.data.user.email}`
-      )
-    }
-
-    return { 
-      data: [{ 
-        id: instanceId,
-        obligation_id: obligationId,
-        status: 'Submitted',
-        submitted_by: user.data.user.id,
-        submitted_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }], 
-      error: null 
-    }
-  } catch (error) {
-    console.error('Error submitting instance:', error)
-    return { data: null, error }
-  }
-}
-
-// Approve instance
-export const approveInstance = async (instanceId, userRegion = null, isAdmin = false) => {
-  try {
-    const user = await supabase.auth.getUser()
-    if (user.error) throw user.error
-
-    const [obligationId, index] = instanceId.split('-')
-    
-    const result = await updateObligationStatus(obligationId, 'Approved', 'Approved', userRegion, isAdmin)
-
-    if (result.data && result.data[0]) {
-      await addActivityHistory(
-        obligationId,
-        instanceId,
-        'Instance approved',
-        `Approved by ${user.data.user.email}`
-      )
-    }
-
-    return { 
-      data: [{ 
-        id: instanceId,
-        obligation_id: obligationId,
-        status: 'Approved',
-        approved_by: user.data.user.id,
-        approved_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      }], 
-      error: null 
-    }
-  } catch (error) {
-    console.error('Error approving instance:', error)
-    return { data: null, error }
-  }
-}
-
-// Upload evidence - Sets progress to Completed when evidence is uploaded (legacy)
-export const uploadEvidence = async (file, obligationId, instanceId = null, userRegion = null, isAdmin = false) => {
-  try {
-    const user = await supabase.auth.getUser()
-    if (user.error) throw user.error
-
-    // Check if user has a region
-    if (!isAdmin && !userRegion) {
-      throw new Error('Your profile does not have a region assigned. Please contact your administrator.')
-    }
-
-    const fileName = `${Date.now()}_${file.name}`
-    const filePath = `evidence/${fileName}`
-
-    // Upload to storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('obligation_evidence')
-      .upload(filePath, file)
-
-    if (uploadError) throw uploadError
-
-    // Get public URL
-    const { data: urlData } = supabase.storage
-      .from('obligation_evidence')
-      .getPublicUrl(filePath)
-
-    // Get region ID if user is regional
-    let regionId = null;
-    if (!isAdmin && userRegion) {
-      regionId = await getRegionId(userRegion);
-      console.log(`Region ID for "${userRegion}":`, regionId);
-    }
-
-    // Save to database
-    const { data, error } = await supabase
-      .from('evidence')
-      .insert({
-        obligation_id: obligationId,
-        instance_id: instanceId,
-        region_id: regionId,
-        file_name: file.name,
-        file_url: urlData.publicUrl,
-        file_type: file.type,
-        file_size: file.size,
-        uploaded_by: user.data.user.id,
-        status: 'Approved'
-      })
-      .select()
-
-    if (error) throw error
-
-    // If regional user uploaded evidence, update progress to Completed
-    if (!isAdmin && userRegion && regionId) {
-      console.log(`Updating progress to Completed for region: ${userRegion}`);
-      await updateRegionProgress(obligationId, userRegion, 'Completed', 'Evidence uploaded');
-    }
-
-    // Add to activity history
-    if (data && data[0]) {
-      await addActivityHistory(
-        obligationId,
-        instanceId,
-        `Evidence uploaded: ${file.name}`,
-        null
-      )
-    }
-
-    return { data, error: null }
-  } catch (error) {
-    console.error('Error uploading evidence:', error)
-    return { data: null, error }
-  }
-}
-
-// Get evidence for an obligation - FILTERED BY REGION
 export const getEvidence = async (obligationId, userRegion = null, isAdmin = false) => {
   try {
+    // Get the UUID from compliance_obligations
+    const { data: obligationData, error: obligationError } = await supabase
+      .from('compliance_obligations')
+      .select('id')
+      .eq('obligation_id', obligationId)
+      .single();
+
+    if (obligationError || !obligationData) {
+      return { data: [], error: null };
+    }
+
+    const obligationUuid = obligationData.id;
+
     let query = supabase
       .from('evidence')
       .select(`
         *,
-        occurrence:obligation_occurrences(
+        progress:compliance_progress!evidence_occurrence_id_fkey(
           id,
-          instance_date,
-          due_date,
-          status
+          occurrence_date,
+          status,
+          region_id
         )
       `)
-      .eq('obligation_id', obligationId)
+      .eq('obligation_id', obligationUuid)
       .order('uploaded_at', { ascending: false });
 
-    // If not admin and has region, filter by region
     if (!isAdmin && userRegion) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
         query = query.eq('region_id', regionId);
-        console.log(`Filtering evidence for region: ${userRegion} (${regionId})`);
       } else {
-        // If region not found, return empty array
         return { data: [], error: null };
       }
     }
@@ -1313,7 +987,6 @@ export const getEvidence = async (obligationId, userRegion = null, isAdmin = fal
     const { data, error } = await query;
 
     if (error) throw error;
-    console.log(`Found ${data?.length || 0} evidence items for region: ${userRegion || 'All'}`);
     return { data, error: null };
   } catch (error) {
     console.error('Error fetching evidence:', error);
@@ -1321,169 +994,323 @@ export const getEvidence = async (obligationId, userRegion = null, isAdmin = fal
   }
 }
 
-// Add comment to obligation
-export const addComment = async (obligationId, comment) => {
+// ============================================================
+// ACTIVITY HISTORY
+// ============================================================
+
+export const addActivityHistory = async (obligationId, progressId = null, action, details = null) => {
   try {
-    const user = await supabase.auth.getUser()
-    if (user.error) throw user.error
-
-    const { data, error } = await supabase
-      .from('activity_history')
-      .insert({
-        obligation_id: obligationId,
-        action: 'Comment added',
-        user_id: user.data.user.id,
-        user_name: user.data.user.user_metadata?.full_name || user.data.user.email || 'User',
-        details: { comment },
-        created_at: new Date().toISOString()
-      })
-      .select()
-
-    if (error) throw error
-    return { data, error: null }
-  } catch (error) {
-    console.error('Error adding comment:', error)
-    return { data: null, error }
-  }
-}
-
-// Add activity history
-export const addActivityHistory = async (obligationId, instanceId = null, action, details = null) => {
-  try {
-    const user = await supabase.auth.getUser()
+    const user = await supabase.auth.getUser();
     
     const { data, error } = await supabase
       .from('activity_history')
       .insert({
         obligation_id: obligationId,
-        instance_id: instanceId,
+        progress_id: progressId,
         action: action,
         user_id: user.data.user?.id || null,
         user_name: user.data.user?.user_metadata?.full_name || user.data.user?.email || 'System',
         details: details ? { comment: details } : null,
         created_at: new Date().toISOString()
       })
-      .select()
+      .select();
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error adding activity history:', error)
-    return { data: null, error }
+    console.error('Error adding activity history:', error);
+    return { data: null, error };
   }
 }
 
-// Get activity history
-export const getActivityHistory = async (obligationId) => {
+export const getActivityHistory = async (obligationId, progressId = null) => {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('activity_history')
       .select('*')
       .eq('obligation_id', obligationId)
-      .order('created_at', { ascending: false })
+      .order('created_at', { ascending: false });
 
-    if (error) throw error
-    return { data, error: null }
+    if (progressId) {
+      query = query.eq('progress_id', progressId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error fetching activity history:', error)
-    return { data: null, error }
+    console.error('Error fetching activity history:', error);
+    return { data: null, error };
   }
 }
 
-// Get dashboard stats - Uses obligation_progress for regional users
+// ============================================================
+// DASHBOARD STATS - FIXED FOR ADMIN VIEW
+// ============================================================
+
 export const getDashboardStats = async (userRegion = null, isAdmin = false) => {
   try {
-    // Get all obligations
-    const { data: obligations, error: obligationsError } = await supabase
-      .from('obligations')
-      .select('id, compliance_weight, current_status');
+    console.log('🔍 [DashboardStats] Fetching stats for:', { userRegion, isAdmin });
 
-    if (obligationsError) throw obligationsError;
-
-    // Get region ID if user is regional
+    // Get region ID if user is regional (NOT admin)
     let regionId = null;
     if (!isAdmin && userRegion) {
       regionId = await getRegionId(userRegion);
+      console.log('🔍 [DashboardStats] Region ID:', regionId);
+    } else if (isAdmin) {
+      console.log('🔍 [DashboardStats] Admin mode - fetching ALL regions');
     }
 
-    // Get progress data for the user's region (or all if admin)
-    let progressQuery = supabase
-      .from('obligation_progress')
-      .select('obligation_id, status, region_id');
+    // ---------------------------------------------------------
+    // 1. GET ALL OBLIGATIONS
+    // ---------------------------------------------------------
+    const { data: obligations, error: obligationsError } = await supabase
+      .from('compliance_obligations')
+      .select('obligation_id, compliance_weight, obligation_type, mandatory');
 
-    if (regionId) {
+    if (obligationsError) {
+      console.error('❌ [DashboardStats] Error fetching obligations:', obligationsError);
+      throw obligationsError;
+    }
+    console.log('✅ [DashboardStats] Obligations fetched:', obligations?.length || 0);
+
+    // ---------------------------------------------------------
+    // 2. GET PROGRESS RECORDS - FILTER TO ONLY PAST/CURRENT (occurrence_date <= today)
+    // ---------------------------------------------------------
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayStr = today.toISOString().split('T')[0];
+    
+    console.log('📅 [DashboardStats] Filtering for obligations up to:', todayStr);
+
+    let progressQuery = supabase
+      .from('compliance_progress')
+      .select('*')
+      .lte('occurrence_date', todayStr);  // Only get records up to today
+
+    // IMPORTANT: For admin, DO NOT filter by region_id (get ALL regions)
+    // For regional user, filter by their region
+    if (!isAdmin && regionId) {
       progressQuery = progressQuery.eq('region_id', regionId);
+      console.log('🔍 [DashboardStats] Filtering by region:', userRegion);
+    } else if (isAdmin) {
+      console.log('🔍 [DashboardStats] Admin - fetching ALL regions');
     }
 
     const { data: progressData, error: progressError } = await progressQuery;
 
-    if (progressError) throw progressError;
-
-    // Calculate stats from progress data
-    const totalObligations = obligations?.length || 0;
-    const completed = progressData?.filter(p => p.status === 'Completed').length || 0;
-    const overdue = progressData?.filter(p => p.status === 'Overdue').length || 0;
-    const inProgress = progressData?.filter(p => p.status === 'In Progress').length || 0;
+    if (progressError) {
+      console.error('❌ [DashboardStats] Error fetching progress:', progressError);
+      throw progressError;
+    }
     
-    // For regional users, total should be the number of obligations that have progress records
-    // For admin, total is all obligations
-    let effectiveTotal = totalObligations;
-    if (!isAdmin && regionId) {
-      // For regional users, total is the number of obligations that have progress for their region
-      effectiveTotal = progressData?.length || 0;
+    console.log('✅ [DashboardStats] Progress records fetched (up to today):', progressData?.length || 0);
+
+    // DEBUG: Log status distribution
+    if (progressData && progressData.length > 0) {
+      const statusCounts = {};
+      progressData.forEach(p => {
+        statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
+      });
+      console.log('📊 [DashboardStats] Status distribution:', statusCounts);
+      
+      // Log region distribution for admin
+      if (isAdmin) {
+        const regionDistribution = {};
+        progressData.forEach(p => {
+          regionDistribution[p.region_id] = (regionDistribution[p.region_id] || 0) + 1;
+        });
+        console.log('📊 [DashboardStats] Region distribution:', regionDistribution);
+      }
     }
 
-    const notStarted = Math.max(0, effectiveTotal - completed - overdue - inProgress);
+    if (!progressData || progressData.length === 0) {
+      console.warn('⚠️ [DashboardStats] No progress records found up to today');
+      return {
+        overallCompliance: 0,
+        auditReadiness: 0,
+        totalObligations: 0,
+        completed: 0,
+        pending: 0,
+        overdue: 0,
+        inProgress: 0,
+        notStarted: 0,
+        highRiskGaps: 0,
+        regionsBelowTarget: 0,
+        regionsTotal: 0,
+        evidenceCompletion: 0,
+        mandatoryObligations: 0,
+        totalOccurrences: 0,
+      };
+    }
 
-    // Calculate compliance (based on effective total)
-    const overallCompliance = effectiveTotal > 0 ? Math.round((completed / effectiveTotal) * 100) : 0;
-    const auditReadiness = effectiveTotal > 0 ? Math.round(((completed + inProgress) / effectiveTotal) * 100) : 0;
+    // ---------------------------------------------------------
+    // 3. CALCULATE STATS
+    // ---------------------------------------------------------
+    const totalProgressRecords = progressData.length;
+    console.log('📊 [DashboardStats] Total progress records (up to today):', totalProgressRecords);
+    
+    // Get unique obligations that have progress up to today
+    const uniqueObligationsWithProgress = new Set(progressData.map(p => p.obligation_id));
+    const totalUniqueObligations = uniqueObligationsWithProgress.size;
+    console.log('📊 [DashboardStats] Unique obligations with progress:', totalUniqueObligations);
 
-    // Calculate weighted compliance
+    // Count by status - ONLY THREE STATUSES
+    const closedRecords = progressData.filter(p => p.status === 'Closed').length;
+    const submittedRecords = progressData.filter(p => p.status === 'Submitted/Under Review').length;
+    const openRecords = progressData.filter(p => p.status === 'Open').length;
+    
+    console.log('📊 [DashboardStats] Status counts (up to today):', {
+      closed: closedRecords,
+      submitted: submittedRecords,
+      open: openRecords,
+      total: totalProgressRecords
+    });
+
+    // Calculate overdue (based on calculated_due_date) - only for Open and Submitted/Under Review
+    const overdueRecords = progressData.filter(p => {
+      if (p.status === 'Closed') return false;
+      const dueDate = p.calculated_due_date || p.occurrence_date;
+      if (!dueDate) return false;
+      const dueDateObj = new Date(dueDate);
+      dueDateObj.setHours(0, 0, 0, 0);
+      return dueDateObj < today;
+    }).length;
+
+    console.log('📊 [DashboardStats] Overdue records:', overdueRecords);
+
+    // Calculate overall compliance
+    const overallCompliance = totalProgressRecords > 0 
+      ? Number(((closedRecords / totalProgressRecords) * 100).toFixed(1))
+      : 0;
+    console.log('📊 [DashboardStats] Overall compliance:', overallCompliance, '%');
+
+    // Audit readiness = (Closed + Submitted/Under Review) / Total
+    const auditReadiness = totalProgressRecords > 0 
+      ? Number((((closedRecords + submittedRecords) / totalProgressRecords) * 100).toFixed(1))
+      : 0;
+    console.log('📊 [DashboardStats] Audit readiness:', auditReadiness, '%');
+
+    // Not Started = Open records that are not overdue
+    const notStarted = openRecords - overdueRecords;
+    console.log('📊 [DashboardStats] Not started (Open - Overdue):', notStarted);
+
+    // ---------------------------------------------------------
+    // 4. CALCULATE WEIGHTED COMPLIANCE
+    // ---------------------------------------------------------
     let totalWeight = 0;
     let achievedWeight = 0;
     
-    if (!isAdmin && regionId) {
-      // For regional users, only count obligations that have progress
-      const progressMap = {};
-      progressData?.forEach(p => {
-        progressMap[p.obligation_id] = p.status;
+    if (progressData && obligations) {
+      const obligationsMap = {};
+      obligations.forEach(o => {
+        obligationsMap[o.obligation_id] = o.compliance_weight || 1;
       });
 
-      obligations?.forEach(o => {
-        if (progressMap[o.id]) {
-          totalWeight += o.compliance_weight || 1;
-          if (progressMap[o.id] === 'Completed') {
-            achievedWeight += o.compliance_weight || 1;
-          }
-        }
-      });
-    } else {
-      // For admin, use all obligations
-      obligations?.forEach(o => {
-        totalWeight += o.compliance_weight || 1;
-        if (o.current_status === 'Completed') {
-          achievedWeight += o.compliance_weight || 1;
+      progressData.forEach(p => {
+        const weight = obligationsMap[p.obligation_id] || 1;
+        totalWeight += weight;
+        if (p.status === 'Closed') {
+          achievedWeight += weight;
         }
       });
     }
 
-    const overallWeightedCompliance = totalWeight > 0 ? Math.round((achievedWeight / totalWeight) * 100) : 0;
+    const overallWeightedCompliance = totalWeight > 0 
+      ? Number(((achievedWeight / totalWeight) * 100).toFixed(1))
+      : 0;
+    console.log('📊 [DashboardStats] Weighted compliance:', overallWeightedCompliance);
 
-    return {
+    // ---------------------------------------------------------
+    // 5. CALCULATE EVIDENCE COMPLETION
+    // ---------------------------------------------------------
+    const progressWithEvidence = progressData.filter(p => p.evidence_id !== null);
+    const progressWithEvidenceCount = progressWithEvidence.length;
+    
+    const evidenceCompletion = totalProgressRecords > 0 
+      ? Number(((progressWithEvidenceCount / totalProgressRecords) * 100).toFixed(1))
+      : 0;
+    
+    console.log('📊 [DashboardStats] Evidence completion:', {
+      total: totalProgressRecords,
+      withEvidence: progressWithEvidenceCount,
+      percentage: evidenceCompletion
+    });
+
+    // ---------------------------------------------------------
+    // 6. CALCULATE MANDATORY OBLIGATIONS
+    // ---------------------------------------------------------
+    const mandatoryObligations = obligations?.filter(o => o.mandatory === true).length || 0;
+    console.log('📊 [DashboardStats] Mandatory obligations:', mandatoryObligations);
+
+    // ---------------------------------------------------------
+    // 7. CALCULATE REGIONS BELOW TARGET
+    // ---------------------------------------------------------
+    let regionsBelowTarget = 0;
+    let regionsTotal = 0;
+    
+    // Get all regions
+    const { data: allRegions, error: regionsError } = await supabase
+      .from('regions')
+      .select('id, name');
+
+    if (!regionsError && allRegions) {
+      regionsTotal = allRegions.length;
+      console.log('📊 [DashboardStats] Total regions:', regionsTotal);
+      
+      // For each region, calculate its compliance using data up to today
+      for (const region of allRegions) {
+        const regionProgress = progressData.filter(p => p.region_id === region.id) || [];
+        const regionTotal = regionProgress.length;
+        const regionClosed = regionProgress.filter(p => p.status === 'Closed').length;
+        const regionCompliance = regionTotal > 0 ? (regionClosed / regionTotal) * 100 : 0;
+        
+        console.log(`📊 [DashboardStats] Region ${region.name}:`, {
+          total: regionTotal,
+          closed: regionClosed,
+          compliance: regionCompliance.toFixed(1) + '%',
+          belowTarget: regionCompliance < 80
+        });
+        
+        // If region compliance is below 80%, count as below target
+        if (regionCompliance < 80 && regionTotal > 0) {
+          regionsBelowTarget++;
+        }
+      }
+    }
+    console.log('📊 [DashboardStats] Regions below target:', regionsBelowTarget);
+
+    // ---------------------------------------------------------
+    // 8. HIGH-RISK GAPS = Overdue records
+    // ---------------------------------------------------------
+    const highRiskGaps = overdueRecords;
+
+    // ---------------------------------------------------------
+    // 9. RETURN ALL STATS
+    // ---------------------------------------------------------
+    const result = {
       overallCompliance: overallWeightedCompliance || overallCompliance,
-      auditReadiness: auditReadiness || 0,
-      totalObligations: effectiveTotal,
-      completed: completed,
-      pending: inProgress,
-      overdue: overdue,
-      inProgress: inProgress,
-      notStarted: notStarted,
-      regionsBelowTarget: 0,
-      regionsTotal: 0,
+      auditReadiness: auditReadiness,
+      totalObligations: totalUniqueObligations,
+      completed: closedRecords,
+      pending: openRecords,
+      overdue: overdueRecords,
+      inProgress: submittedRecords,
+      notStarted: notStarted > 0 ? notStarted : 0,
+      highRiskGaps: highRiskGaps,
+      regionsBelowTarget: regionsBelowTarget,
+      regionsTotal: regionsTotal,
+      evidenceCompletion: evidenceCompletion,
+      mandatoryObligations: mandatoryObligations,
+      totalOccurrences: totalProgressRecords,
     };
+
+    console.log('✅ [DashboardStats] Final result:', result);
+    return result;
+
   } catch (error) {
-    console.error('Error fetching dashboard stats:', error);
+    console.error('❌ [DashboardStats] Error:', error);
     return {
       overallCompliance: 0,
       auditReadiness: 0,
@@ -1493,178 +1320,212 @@ export const getDashboardStats = async (userRegion = null, isAdmin = false) => {
       overdue: 0,
       inProgress: 0,
       notStarted: 0,
+      highRiskGaps: 0,
       regionsBelowTarget: 0,
       regionsTotal: 0,
+      evidenceCompletion: 0,
+      mandatoryObligations: 0,
+      totalOccurrences: 0,
     };
   }
 };
 
-// Get compliance by domain - Uses obligation_progress for regional users
+// ============================================================
+// COMPLIANCE BY DOMAIN
+// ============================================================
+
+// ============================================================
+// COMPLIANCE BY DOMAIN - FIXED
+// ============================================================
+
 export const getComplianceByDomain = async (userRegion = null, isAdmin = false) => {
   try {
-    const { data: obligations, error } = await supabase
-      .from('obligations')
-      .select('id, domain, compliance_weight, current_status')
+    console.log('🔍 [ComplianceByDomain] Fetching for:', { userRegion, isAdmin });
 
-    if (error) throw error
-
-    let progressData = {};
+    let regionId = null;
     if (!isAdmin && userRegion) {
-      const regionId = await getRegionId(userRegion);
-      if (regionId) {
-        const { data: progress, error: progressError } = await supabase
-          .from('obligation_progress')
-          .select('obligation_id, status')
-          .eq('region_id', regionId);
-        
-        if (!progressError && progress) {
-          progress.forEach(p => {
-            progressData[p.obligation_id] = p.status;
-          });
-        }
-      }
+      regionId = await getRegionId(userRegion);
     }
 
-    const domainMap = {}
-    obligations?.forEach(o => {
+    const { data: obligations, error: obligationsError } = await supabase
+      .from('compliance_obligations')
+      .select('obligation_id, domain, compliance_weight, obligation_type');
+
+    if (obligationsError) {
+      console.error('❌ [ComplianceByDomain] Error fetching obligations:', obligationsError);
+      throw obligationsError;
+    }
+
+    if (!obligations || obligations.length === 0) {
+      return { domains: [], compliance: [] };
+    }
+
+    let progressQuery = supabase
+      .from('compliance_progress')
+      .select('obligation_id, status, occurrence_date, region_id');
+
+    if (regionId) {
+      progressQuery = progressQuery.eq('region_id', regionId);
+    }
+
+    const { data: progressData, error: progressError } = await progressQuery;
+
+    if (progressError) {
+      console.error('❌ [ComplianceByDomain] Error fetching progress:', progressError);
+      throw progressError;
+    }
+
+    if (!progressData || progressData.length === 0) {
+      return { domains: [], compliance: [] };
+    }
+
+    // Get the latest status for each obligation (only Closed status counts as completed)
+    const latestStatusMap = {};
+    progressData.forEach(p => {
+      if (!latestStatusMap[p.obligation_id] || 
+          new Date(p.occurrence_date) > new Date(latestStatusMap[p.obligation_id].occurrence_date)) {
+        latestStatusMap[p.obligation_id] = p;
+      }
+    });
+
+    // Group by domain and calculate compliance
+    const domainMap = {};
+    obligations.forEach(o => {
       if (!domainMap[o.domain]) {
-        domainMap[o.domain] = { total: 0, achieved: 0 }
+        domainMap[o.domain] = { total: 0, achieved: 0 };
       }
-      domainMap[o.domain].total += o.compliance_weight || 1
+      domainMap[o.domain].total += o.compliance_weight || 1;
       
-      let isCompleted = false;
-      if (!isAdmin && userRegion) {
-        isCompleted = progressData[o.id] === 'Completed';
-      } else {
-        isCompleted = o.current_status === 'Completed';
+      const latest = latestStatusMap[o.obligation_id];
+      // Only count as achieved if status is 'Closed'
+      if (latest && latest.status === 'Closed') {
+        domainMap[o.domain].achieved += o.compliance_weight || 1;
       }
-      
-      if (isCompleted) {
-        domainMap[o.domain].achieved += o.compliance_weight || 1
-      }
-    })
+    });
 
-    const domains = Object.keys(domainMap)
+    const domains = Object.keys(domainMap);
     const compliance = domains.map(d => 
-      Math.round((domainMap[d].achieved / domainMap[d].total) * 100)
-    )
+      Number(((domainMap[d].achieved / domainMap[d].total) * 100).toFixed(1))
+    );
 
-    return { domains, compliance }
+    return { domains, compliance };
   } catch (error) {
-    console.error('Error fetching compliance by domain:', error)
-    return { domains: [], compliance: [] }
+    console.error('❌ [ComplianceByDomain] Error:', error);
+    return { domains: [], compliance: [] };
   }
-}
+};
 
-// Get upcoming deadlines - Uses obligation_progress for status
+// ============================================================
+// UPCOMING DEADLINES
+// ============================================================
+
 export const getUpcomingDeadlines = async (userRegion = null, isAdmin = false) => {
   try {
     const { data: obligations, error } = await supabase
-      .from('obligations')
-      .select('*')
+      .from('compliance_obligations')
+      .select('*');
     
-    if (error) throw error
-    if (!obligations || obligations.length === 0) return []
+    if (error) throw error;
+    if (!obligations || obligations.length === 0) return [];
 
-    let progressData = {};
+    let progressData = [];
     if (!isAdmin && userRegion) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
         const { data: progress, error: progressError } = await supabase
-          .from('obligation_progress')
-          .select('obligation_id, status')
-          .eq('region_id', regionId);
+          .from('compliance_progress')
+          .select('*')
+          .eq('region_id', regionId)
+          .eq('status', 'Open')
+          .order('calculated_due_date', { ascending: true });
         
         if (!progressError && progress) {
-          progress.forEach(p => {
-            progressData[p.obligation_id] = p.status;
-          });
+          progressData = progress;
         }
+      }
+    } else if (isAdmin) {
+      const { data: progress, error: progressError } = await supabase
+        .from('compliance_progress')
+        .select('*')
+        .eq('status', 'Open')
+        .order('calculated_due_date', { ascending: true });
+      
+      if (!progressError && progress) {
+        progressData = progress;
       }
     }
 
-    let allInstances = []
-    
-    for (const obligation of obligations) {
-      const instances = generateInstancesFromObligation(obligation)
-      const instancesWithObligation = instances.map(instance => {
-        let status = instance.status;
-        if (!isAdmin && userRegion) {
-          const progressStatus = progressData[obligation.id];
-          if (progressStatus) {
-            status = progressStatus;
-          } else {
-            status = obligation.current_status || instance.status;
-          }
-        } else {
-          status = obligation.current_status || instance.status;
-        }
-        
-        return {
-          ...instance,
-          status,
+    const today = new Date();
+    const nextMonth = new Date(today);
+    nextMonth.setMonth(nextMonth.getMonth() + 1);
+
+    const upcoming = progressData.filter(progress => {
+      const dueDate = new Date(progress.calculated_due_date || progress.occurrence_date);
+      return dueDate >= today && dueDate <= nextMonth && progress.status !== 'Closed';
+    });
+
+    const result = [];
+    for (const progress of upcoming) {
+      const obligation = obligations.find(o => o.obligation_id === progress.obligation_id);
+      if (obligation) {
+        result.push({
+          ...progress,
           obligation: {
             id: obligation.id,
-            name: obligation.name,
+            name: obligation.obligation_name,
             obligation_id: obligation.obligation_id,
-            domain: obligation.domain
+            domain: obligation.domain,
+            policy: obligation.policy
           }
-        }
-      })
-      allInstances = [...allInstances, ...instancesWithObligation]
+        });
+      }
     }
-
-    const today = new Date()
-    const nextMonth = new Date(today)
-    nextMonth.setMonth(nextMonth.getMonth() + 1)
-
-    const upcoming = allInstances.filter(instance => {
-      const dueDate = new Date(instance.due_date)
-      return dueDate >= today && dueDate <= nextMonth && instance.status !== 'Completed'
-    })
-
-    upcoming.sort((a, b) => new Date(a.due_date) - new Date(b.due_date))
     
-    return upcoming.slice(0, 10)
+    return result.slice(0, 10);
   } catch (error) {
-    console.error('Error fetching upcoming deadlines:', error)
-    return []
+    console.error('Error fetching upcoming deadlines:', error);
+    return [];
   }
-}
+};
 
-// Get all regions
+// ============================================================
+// REGION FUNCTIONS
+// ============================================================
+
 export const getRegions = async () => {
   try {
     const { data, error } = await supabase
       .from('regions')
       .select('*')
-      .order('name')
+      .order('name');
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error fetching regions:', error)
-    return { data: null, error }
+    console.error('Error fetching regions:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Get users with profiles
 export const getUsers = async () => {
   try {
     const { data, error } = await supabase
       .from('profiles')
       .select('*')
-      .order('full_name')
+      .order('full_name');
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error fetching users:', error)
-    return { data: null, error }
+    console.error('Error fetching users:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Create notification
+// ============================================================
+// NOTIFICATION FUNCTIONS
+// ============================================================
+
 export const createNotification = async (userId, title, message, type, link = null) => {
   try {
     const { data, error } = await supabase
@@ -1676,105 +1537,212 @@ export const createNotification = async (userId, title, message, type, link = nu
         type,
         link
       })
-      .select()
+      .select();
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error creating notification:', error)
-    return { data: null, error }
+    console.error('Error creating notification:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Get user notifications
 export const getNotifications = async () => {
   try {
-    const user = await supabase.auth.getUser()
-    if (user.error) throw user.error
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
 
     const { data, error } = await supabase
       .from('notifications')
       .select('*')
       .eq('user_id', user.data.user.id)
       .order('created_at', { ascending: false })
-      .limit(50)
+      .limit(50);
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error fetching notifications:', error)
-    return { data: null, error }
+    console.error('Error fetching notifications:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Mark notification as read
 export const markNotificationRead = async (notificationId) => {
   try {
     const { data, error } = await supabase
       .from('notifications')
       .update({ read: true })
       .eq('id', notificationId)
-      .select()
+      .select();
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error marking notification as read:', error)
-    return { data: null, error }
+    console.error('Error marking notification as read:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Get all policies
+// ============================================================
+// POLICY FUNCTIONS
+// ============================================================
+
 export const getPolicies = async () => {
   try {
     const { data, error } = await supabase
       .from('policies')
       .select('*')
-      .order('name')
+      .order('name');
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data, error: null };
   } catch (error) {
-    console.error('Error fetching policies:', error)
-    return { data: null, error }
+    console.error('Error fetching policies:', error);
+    return { data: null, error };
   }
-}
+};
 
-// Update audit readiness
-export const updateAuditReadiness = async (obligationId, score, notes = '') => {
+// ============================================================
+// REGION PROGRESS FUNCTIONS
+// ============================================================
+
+export const getRegionProgressSummary = async (regionId) => {
   try {
     const { data, error } = await supabase
-      .from('audit_readiness')
-      .upsert({
-        obligation_id: obligationId,
-        readiness_score: score,
-        notes: notes,
-        last_assessed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      })
-      .select()
+      .from('compliance_progress')
+      .select('*')
+      .eq('region_id', regionId);
 
-    if (error) throw error
-    return { data, error: null }
+    if (error) throw error;
+
+    const total = data?.length || 0;
+    const open = data?.filter(p => p.status === 'Open').length || 0;
+    const submitted = data?.filter(p => p.status === 'Submitted/Under Review').length || 0;
+    const closed = data?.filter(p => p.status === 'Closed').length || 0;
+
+    const overdue = data?.filter(p => {
+      if (p.status === 'Closed') return false;
+      const dueDate = p.calculated_due_date || p.occurrence_date;
+      return dueDate && new Date(dueDate) < new Date();
+    }).length || 0;
+
+    return {
+      total,
+      open,
+      submitted,
+      closed,
+      overdue,
+      completionRate: total > 0 ? Math.round((closed / total) * 100) : 0
+    };
   } catch (error) {
-    console.error('Error updating audit readiness:', error)
-    return { data: null, error }
+    console.error('Error fetching region progress summary:', error);
+    return { total: 0, open: 0, submitted: 0, closed: 0, overdue: 0, completionRate: 0 };
   }
-}
+};
 
-// Get audit readiness
-export const getAuditReadiness = async (obligationId) => {
+export const getObligationProgressByRegion = async (obligationId, regionId) => {
   try {
     const { data, error } = await supabase
-      .from('audit_readiness')
+      .from('compliance_progress')
       .select('*')
       .eq('obligation_id', obligationId)
-      .single()
+      .eq('region_id', regionId)
+      .order('occurrence_date', { ascending: false })
+      .limit(1);
 
-    if (error && error.code !== 'PGRST116') throw error
-    return { data, error: null }
+    if (error) throw error;
+    return { data: data?.[0] || null, error: null };
   } catch (error) {
-    console.error('Error fetching audit readiness:', error)
-    return { data: null, error }
+    console.error('Error fetching obligation progress by region:', error);
+    return { data: null, error };
   }
+};
+
+export const createProgressRecord = async (obligationId, regionId, occurrenceDate, status = 'Open', comments = null) => {
+  try {
+    const { data: obligation, error: obligationError } = await supabase
+      .from('compliance_obligations')
+      .select('frequency, calculated_due_date')
+      .eq('obligation_id', obligationId)
+      .single();
+
+    if (obligationError) throw obligationError;
+
+    let calculatedDueDate = null;
+    const occurrenceDateObj = new Date(occurrenceDate);
+
+    if (obligation.frequency === 'Monthly') {
+      calculatedDueDate = new Date(occurrenceDateObj.getFullYear(), occurrenceDateObj.getMonth(), 25);
+    } else if (obligation.frequency === 'Quarterly') {
+      const quarterMonth = Math.ceil((occurrenceDateObj.getMonth() + 1) / 3) * 3;
+      calculatedDueDate = new Date(occurrenceDateObj.getFullYear(), quarterMonth - 1, 25);
+    } else if (obligation.frequency === 'Bi-Annual') {
+      const month = occurrenceDateObj.getMonth();
+      const lastMonth = month < 6 ? 5 : 11;
+      calculatedDueDate = new Date(occurrenceDateObj.getFullYear(), lastMonth, 25);
+    } else if (obligation.frequency === 'Annual' || obligation.frequency === 'Yearly') {
+      calculatedDueDate = new Date(occurrenceDateObj.getFullYear(), 11, 25);
+    } else if (obligation.frequency === 'Event Based') {
+      calculatedDueDate = new Date(occurrenceDateObj);
+      calculatedDueDate.setDate(calculatedDueDate.getDate() + 2);
+    } else {
+      calculatedDueDate = new Date(occurrenceDateObj.getFullYear(), occurrenceDateObj.getMonth(), 25);
+    }
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .insert({
+        obligation_id: obligationId,
+        region_id: regionId,
+        occurrence_date: occurrenceDate,
+        calculated_due_date: calculatedDueDate.toISOString().split('T')[0],
+        status: status,
+        comments: comments,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .select();
+
+    if (error) throw error;
+    return { data: data?.[0] || null, error: null };
+  } catch (error) {
+    console.error('Error creating progress record:', error);
+    return { data: null, error };
+  }
+};
+
+// ============================================================
+// EXPORT FUNCTIONS
+// ============================================================
+
+export default {
+  getRegionId,
+  getRegionName,
+  getObligations,
+  getObligationById,
+  getObligationByObligationId,
+  generateOccurrences,
+  getOccurrencesForMonth,
+  updateOccurrenceStatus,
+  getPendingApprovals,
+  getApprovedOccurrences,
+  approveOccurrence,
+  rejectOccurrence,
+  submitOccurrenceForReview,
+  uploadEvidenceForOccurrence,
+  getEvidence,
+  addActivityHistory,
+  getActivityHistory,
+  getDashboardStats,
+  getComplianceByDomain,
+  getUpcomingDeadlines,
+  getRegions,
+  getUsers,
+  getRegionProgressSummary,
+  getObligationProgressByRegion,
+  createProgressRecord,
+  createNotification,
+  getNotifications,
+  markNotificationRead,
+  getPolicies,
 }

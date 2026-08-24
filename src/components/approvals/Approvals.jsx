@@ -31,6 +31,7 @@ const Approvals = () => {
   const [viewingEvidence, setViewingEvidence] = useState(null);
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
   const [regionMap, setRegionMap] = useState({});
+  const [obligationMap, setObligationMap] = useState({});
 
   useEffect(() => {
     fetchRegions();
@@ -51,12 +52,29 @@ const Approvals = () => {
           map[region.id] = region.name;
         });
         setRegionMap(map);
-        // Debug: Log regions loaded
         console.log('🔍 [DEBUG] Regions loaded:', data);
         console.log('🔍 [DEBUG] Region Map:', map);
       }
     } catch (error) {
       console.error('Error fetching regions:', error);
+    }
+  };
+
+  // Get region ID from region name
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
     }
   };
 
@@ -71,38 +89,29 @@ const Approvals = () => {
       if (pendingRes.error) throw pendingRes.error;
       if (approvedRes.error) throw approvedRes.error;
 
-      // Debug: Log raw data
       console.log('🔍 [DEBUG] Raw Pending Approvals:', JSON.stringify(pendingRes.data, null, 2));
       console.log('🔍 [DEBUG] Raw Approved Occurrences:', JSON.stringify(approvedRes.data, null, 2));
 
       // Process pending approvals to add region name
-      const processedPending = (pendingRes.data || []).map(item => {
-        const regionName = getRegionName(item);
-        console.log(`🔍 [DEBUG] Processing Pending - ID: ${item.id}, Region: ${regionName}`, {
-          obligation_region: item.obligation?.region,
-          occurrence_region_id: item.region_id,
-          obligation_region_id: item.obligation?.region_id,
-          regionMap_lookup: item.region_id ? regionMap[item.region_id] : null
-        });
+      const processedPending = await Promise.all((pendingRes.data || []).map(async (item) => {
+        const regionName = await getRegionName(item);
+        const obligationDetails = await getObligationDetails(item.obligation_id);
         return {
           ...item,
-          region_name: regionName
+          region_name: regionName,
+          obligation: obligationDetails || item.obligation
         };
-      });
+      }));
 
-      const processedApproved = (approvedRes.data || []).map(item => {
-        const regionName = getRegionName(item);
-        console.log(`🔍 [DEBUG] Processing Approved - ID: ${item.id}, Region: ${regionName}`, {
-          obligation_region: item.obligation?.region,
-          occurrence_region_id: item.region_id,
-          obligation_region_id: item.obligation?.region_id,
-          regionMap_lookup: item.region_id ? regionMap[item.region_id] : null
-        });
+      const processedApproved = await Promise.all((approvedRes.data || []).map(async (item) => {
+        const regionName = await getRegionName(item);
+        const obligationDetails = await getObligationDetails(item.obligation_id);
         return {
           ...item,
-          region_name: regionName
+          region_name: regionName,
+          obligation: obligationDetails || item.obligation
         };
-      });
+      }));
 
       console.log('🔍 [DEBUG] Processed Pending with regions:', processedPending.map(p => ({ id: p.id, region: p.region_name })));
       console.log('🔍 [DEBUG] Processed Approved with regions:', processedApproved.map(p => ({ id: p.id, region: p.region_name })));
@@ -118,7 +127,7 @@ const Approvals = () => {
   };
 
   // Helper function to get region name from occurrence
-  const getRegionName = (occurrence) => {
+  const getRegionName = async (occurrence) => {
     // First try to get region from obligation.region
     if (occurrence.obligation?.region) {
       return occurrence.obligation.region;
@@ -134,16 +143,60 @@ const Approvals = () => {
       return regionMap[occurrence.obligation.region_id];
     }
     
-    // Debug: Log when region is not found
+    // If we have an obligation_id but no region, fetch it from compliance_obligations
+    if (occurrence.obligation_id) {
+      try {
+        const { data } = await supabase
+          .from('compliance_obligations')
+          .select('region')
+          .eq('obligation_id', occurrence.obligation_id)
+          .single();
+        
+        if (data?.region) {
+          return data.region;
+        }
+      } catch (error) {
+        console.log('Error fetching obligation region:', error);
+      }
+    }
+    
     console.log('🔍 [DEBUG] Region not found for occurrence:', {
       id: occurrence.id,
       obligation_region: occurrence.obligation?.region,
       occurrence_region_id: occurrence.region_id,
       obligation_region_id: occurrence.obligation?.region_id,
-      full_occurrence: occurrence
+      obligation_id: occurrence.obligation_id
     });
     
     return "N/A";
+  };
+
+  // Helper function to get obligation details
+  const getObligationDetails = async (obligationId) => {
+    if (!obligationId) return null;
+    
+    // Check cache first
+    if (obligationMap[obligationId]) {
+      return obligationMap[obligationId];
+    }
+    
+    try {
+      const { data, error } = await supabase
+        .from('compliance_obligations')
+        .select('*')
+        .eq('obligation_id', obligationId)
+        .single();
+      
+      if (!error && data) {
+        // Cache the result
+        setObligationMap(prev => ({ ...prev, [obligationId]: data }));
+        return data;
+      }
+      return null;
+    } catch (error) {
+      console.error('Error fetching obligation details:', error);
+      return null;
+    }
   };
 
   const handleApprove = async (occurrenceId) => {
@@ -341,7 +394,7 @@ const Approvals = () => {
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(item => 
-        item.obligation?.name?.toLowerCase().includes(term) ||
+        item.obligation?.obligation_name?.toLowerCase().includes(term) ||
         item.obligation?.obligation_id?.toLowerCase().includes(term) ||
         item.obligation?.domain?.toLowerCase().includes(term)
       );
@@ -363,7 +416,7 @@ const Approvals = () => {
     if (searchTerm) {
       const term = searchTerm.toLowerCase();
       filtered = filtered.filter(item => 
-        item.obligation?.name?.toLowerCase().includes(term) ||
+        item.obligation?.obligation_name?.toLowerCase().includes(term) ||
         item.obligation?.obligation_id?.toLowerCase().includes(term) ||
         item.obligation?.domain?.toLowerCase().includes(term)
       );
@@ -377,6 +430,8 @@ const Approvals = () => {
 
   // Render evidence item with View and Download buttons
   const renderEvidenceItem = (evidenceItem) => {
+    if (!evidenceItem) return null;
+    
     return (
       <div key={evidenceItem.id} className="p-3 bg-gray-50 rounded border border-gray-200 hover:bg-gray-100 transition-colors">
         <div className="flex items-center justify-between">
@@ -567,18 +622,16 @@ const Approvals = () => {
           ) : (
             filteredPending.map((occurrence) => {
               const regionName = occurrence.region_name || occurrence.obligation?.region || "N/A";
-              // Debug: Log region being displayed
-              console.log(`🔍 [DEBUG] Displaying Pending - ID: ${occurrence.id}, Region: ${regionName}`, {
-                occurrence_region_name: occurrence.region_name,
-                obligation_region: occurrence.obligation?.region
-              });
+              const dueDate = occurrence.calculated_due_date || occurrence.due_date;
+              const occurrenceDate = occurrence.occurrence_date || occurrence.instance_date;
+              
               return (
                 <div key={occurrence.id} className="bg-white rounded-lg shadow p-4 sm:p-6 hover:shadow-md transition-shadow">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                     <div className="flex-1 w-full">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-semibold text-gray-900">
-                          {occurrence.obligation?.name || "Unknown Obligation"}
+                          {occurrence.obligation?.obligation_name || "Unknown Obligation"}
                         </h3>
                         <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusBadge(occurrence.status)}`}>
                           {occurrence.status}
@@ -595,10 +648,10 @@ const Approvals = () => {
                           Region: {regionName}
                         </span>
                         <span className="text-xs text-gray-500">
-                          Due: {formatDate(occurrence.due_date)}
+                          Due: {formatDate(dueDate)}
                         </span>
                         <span className="text-xs text-gray-500">
-                          Instance: {formatDate(occurrence.instance_date)}
+                          Occurrence: {formatDate(occurrenceDate)}
                         </span>
                       </div>
                       
@@ -643,7 +696,7 @@ const Approvals = () => {
                   </div>
                   <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-400">
                     <span>Submitted: {formatDateTime(occurrence.updated_at)}</span>
-                    <span>Instance: {formatDate(occurrence.instance_date)}</span>
+                    <span>Occurrence: {formatDate(occurrenceDate)}</span>
                     {occurrence.evidence?.uploaded_by && (
                       <span>Uploaded by: {occurrence.evidence.uploaded_by}</span>
                     )}
@@ -669,18 +722,16 @@ const Approvals = () => {
           ) : (
             filteredApproved.map((occurrence) => {
               const regionName = occurrence.region_name || occurrence.obligation?.region || "N/A";
-              // Debug: Log region being displayed
-              console.log(`🔍 [DEBUG] Displaying Approved - ID: ${occurrence.id}, Region: ${regionName}`, {
-                occurrence_region_name: occurrence.region_name,
-                obligation_region: occurrence.obligation?.region
-              });
+              const dueDate = occurrence.calculated_due_date || occurrence.due_date;
+              const occurrenceDate = occurrence.occurrence_date || occurrence.instance_date;
+              
               return (
                 <div key={occurrence.id} className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-green-500 hover:shadow-md transition-shadow">
                   <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
                     <div className="flex-1 w-full">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="text-base font-semibold text-gray-900">
-                          {occurrence.obligation?.name || "Unknown Obligation"}
+                          {occurrence.obligation?.obligation_name || "Unknown Obligation"}
                         </h3>
                         <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusBadge(occurrence.status)}`}>
                           {occurrence.status}
@@ -698,10 +749,10 @@ const Approvals = () => {
                           Region: {regionName}
                         </span>
                         <span className="text-xs text-gray-500">
-                          Due: {formatDate(occurrence.due_date)}
+                          Due: {formatDate(dueDate)}
                         </span>
                         <span className="text-xs text-gray-500">
-                          Instance: {formatDate(occurrence.instance_date)}
+                          Occurrence: {formatDate(occurrenceDate)}
                         </span>
                       </div>
                       
@@ -726,8 +777,8 @@ const Approvals = () => {
                     </div>
                   </div>
                   <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-400">
-                    <span>Instance: {formatDate(occurrence.instance_date)}</span>
-                    <span>Due: {formatDate(occurrence.due_date)}</span>
+                    <span>Occurrence: {formatDate(occurrenceDate)}</span>
+                    <span>Due: {formatDate(dueDate)}</span>
                     {occurrence.evidence?.uploaded_by && (
                       <span>Uploaded by: {occurrence.evidence.uploaded_by}</span>
                     )}
@@ -874,7 +925,7 @@ const Approvals = () => {
                 Reject Approval
               </h3>
               <p className="text-sm text-gray-500 text-center mb-4">
-                Are you sure you want to reject "{selectedOccurrence.obligation?.name}"?
+                Are you sure you want to reject "{selectedOccurrence.obligation?.obligation_name || 'this obligation'}"?
                 This will move it back to "Open" status.
               </p>
               <div className="mb-4">

@@ -2,7 +2,12 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
-import { toast } from 'react-toastify';
+import { 
+  getObligations, 
+  getObligationByObligationId,
+  getRegions,
+  getPolicies
+} from "../../api/compliance";
 
 const ComplianceRegister = () => {
   const navigate = useNavigate();
@@ -38,10 +43,10 @@ const ComplianceRegister = () => {
   const [addSuccess, setAddSuccess] = useState("");
   const [addFormData, setAddFormData] = useState({
     obligation_id: "",
-    policy_id: null,
+    policy: "",
     clause: "",
     domain: "",
-    name: "",
+    obligation_name: "",
     description: "",
     responsible: "",
     accountable: "",
@@ -60,7 +65,9 @@ const ComplianceRegister = () => {
     obligation_type: "Cyclic",
   });
 
-  const [eventTemplates, setEventTemplates] = useState([]);
+  // Message state for center display
+  const [message, setMessage] = useState({ text: "", type: "", visible: false });
+
   const [selectedTemplate, setSelectedTemplate] = useState(null);
   const [obligationNameOptions, setObligationNameOptions] = useState([]);
   const [filteredNameOptions, setFilteredNameOptions] = useState([]);
@@ -73,7 +80,7 @@ const ComplianceRegister = () => {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingObligation, setEditingObligation] = useState(null);
   const [editFormData, setEditFormData] = useState({
-    name: "",
+    obligation_name: "",
     description: "",
     domain: "",
     frequency: "",
@@ -101,11 +108,7 @@ const ComplianceRegister = () => {
 
   const [policies, setPolicies] = useState([]);
   const [eventObligationsData, setEventObligationsData] = useState([]);
-  
-  // State for available event obligations (all event obligations from event_obligations table)
   const [allEventObligations, setAllEventObligations] = useState([]);
-
-  // State for expanded obligation names in table
   const [expandedObligationId, setExpandedObligationId] = useState(null);
 
   // Month and Year options
@@ -124,6 +127,14 @@ const ComplianceRegister = () => {
     { value: "12", label: "December" },
   ];
 
+  // Show center message
+  const showMessage = (text, type = 'success') => {
+    setMessage({ text, type, visible: true });
+    setTimeout(() => {
+      setMessage({ text: "", type: "", visible: false });
+    }, 5000);
+  };
+
   const getYears = () => {
     const currentYear = new Date().getFullYear();
     const years = [];
@@ -133,31 +144,30 @@ const ComplianceRegister = () => {
     return years;
   };
 
-  // Parse URL parameters on mount and when location changes
+  // Parse URL parameters
   useEffect(() => {
     const params = new URLSearchParams(location.search);
     const statusParam = params.get('status');
     const monthParam = params.get('month');
     const yearParam = params.get('year');
     
-    if (statusParam) {
-      setFilterStatus(statusParam);
-    }
-    if (monthParam) {
-      setFilterMonth(monthParam);
-    }
-    if (yearParam) {
-      setFilterYear(yearParam);
-    }
+    if (statusParam) setFilterStatus(statusParam);
+    if (monthParam) setFilterMonth(monthParam);
+    if (yearParam) setFilterYear(yearParam);
   }, [location.search]);
 
+  // Initial fetch
   useEffect(() => {
     fetchObligations();
     fetchPolicies();
-    fetchEventTemplates();
     fetchObligationNameOptions();
     fetchAllEventObligations();
   }, []);
+
+  // Re-fetch when filters change
+  useEffect(() => {
+    fetchObligations();
+  }, [searchTerm, filterStatus, filterFrequency, filterDomain, filterMonth, filterYear, activeTab]);
 
   // Click outside handler for name dropdown
   useEffect(() => {
@@ -198,7 +208,7 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Fetch all event obligations (all from event_obligations table)
+  // Fetch all event obligations
   const fetchAllEventObligations = async () => {
     try {
       const { data: eventObligations, error: eventError } = await supabase
@@ -207,272 +217,133 @@ const ComplianceRegister = () => {
         .order('name');
 
       if (eventError) throw eventError;
-
       setAllEventObligations(eventObligations || []);
     } catch (error) {
       console.error('Error fetching all event obligations:', error);
     }
   };
 
-  // Generate occurrences for an obligation across multiple months - FIXED for month filtering
-  const generateOccurrencesForObligation = (obligation, monthsToGenerate = 24) => {
-    const occurrences = [];
-    const currentDate = new Date();
-    const dueDate = obligation.calculated_due_date ? new Date(obligation.calculated_due_date) : new Date();
-    const dueDay = dueDate.getDate();
-    
-    let monthIncrement = 1;
-    if (obligation.frequency === 'Quarterly') monthIncrement = 3;
-    else if (obligation.frequency === 'Bi-Annual') monthIncrement = 6;
-    else if (obligation.frequency === 'Annual' || obligation.frequency === 'Yearly') monthIncrement = 12;
-    else if (obligation.frequency === 'Monthly') monthIncrement = 1;
-    else {
-      // For event-based or non-cyclic, only generate one occurrence
-      const monthStr = String(dueDate.getMonth() + 1).padStart(2, "0");
-      const yearStr = dueDate.getFullYear().toString();
-      
-      // Check if this occurrence matches the month/year filter
-      if (filterMonth && filterMonth !== monthStr) return [];
-      if (filterYear && filterYear !== yearStr) return [];
-      
-      return [{
-        ...obligation,
-        instance_date: dueDate.toISOString().split('T')[0],
-        calculated_due_date: dueDate.toISOString().split('T')[0],
-        month: monthStr,
-        year: yearStr,
-        occurrence_status: obligation.current_status || 'Open'
-      }];
-    }
-
-    // Generate occurrences for each month
-    for (let i = 0; i < monthsToGenerate; i++) {
-      const occurrenceDate = new Date(
-        currentDate.getFullYear(),
-        currentDate.getMonth() - (monthsToGenerate - 1 - i),
-        1
-      );
-      
-      // Adjust if we're before the due date
-      if (occurrenceDate < dueDate && i === 0) {
-        occurrenceDate.setFullYear(dueDate.getFullYear());
-        occurrenceDate.setMonth(dueDate.getMonth());
-      }
-
-      const lastDayOfMonth = new Date(
-        occurrenceDate.getFullYear(),
-        occurrenceDate.getMonth() + 1,
-        0
-      ).getDate();
-      
-      const effectiveDay = Math.min(dueDay, lastDayOfMonth);
-      const dueDateForOccurrence = new Date(
-        occurrenceDate.getFullYear(),
-        occurrenceDate.getMonth(),
-        effectiveDay
-      );
-
-      // Check if we should include this occurrence based on due date month
-      const monthStr = String(occurrenceDate.getMonth() + 1).padStart(2, "0");
-      const yearStr = occurrenceDate.getFullYear().toString();
-      
-      // Skip if we're filtering by month/year and this doesn't match the due date month/year
-      if (filterMonth && filterMonth !== monthStr) continue;
-      if (filterYear && filterYear !== yearStr) continue;
-
-      occurrences.push({
-        ...obligation,
-        instance_date: new Date(occurrenceDate.getFullYear(), occurrenceDate.getMonth(), 1).toISOString().split('T')[0],
-        calculated_due_date: dueDateForOccurrence.toISOString().split('T')[0],
-        month: monthStr,
-        year: yearStr,
-        occurrence_status: obligation.current_status || 'Open'
-      });
-    }
-
-    return occurrences;
-  };
-
-  // Fetch all obligations with their status from obligation_occurrences
+  // Fetch obligations using the API function
   const fetchObligations = async () => {
     setLoading(true);
     try {
-      let userRegionId = null;
-      if (!isAdmin && userRegion) {
-        userRegionId = await getRegionId(userRegion);
+      const filters = {};
+      
+      if (filterDomain && filterDomain !== 'all') {
+        filters.domain = filterDomain;
+      }
+      
+      if (filterFrequency && filterFrequency !== 'all') {
+        filters.frequency = filterFrequency;
+      }
+      
+      if (filterStatus && filterStatus !== 'all') {
+        filters.status = filterStatus;
+      }
+      
+      if (searchTerm) {
+        filters.search = searchTerm;
+      }
+      
+      if (activeTab === 'eventlist') {
+        filters.obligation_type = 'Event';
       }
 
-      const currentDate = new Date();
+      // Pass month and year filters
+      if (filterMonth) {
+        filters.month = filterMonth;
+      }
+      if (filterYear) {
+        filters.year = filterYear;
+      }
 
-      let query = supabase
-        .from("obligations")
-        .select(`
-          *,
-          policy:policies(*),
-          obligation_occurrences!left(
-            id,
-            status,
-            instance_date,
-            due_date,
-            completed_at,
-            started_at,
-            comments,
-            region_id
-          ),
-          obligation_progress!left(
-            id,
-            status,
-            completed_at,
-            started_at,
-            last_updated_at,
-            comments,
-            region_id
-          )
-        `)
-        .order("created_at", { ascending: false });
+      console.log('📊 Fetching obligations with filters:', filters);
+      console.log('👤 User region:', userRegion, 'Is Admin:', isAdmin);
 
-      const { data, error } = await query;
-
-      if (!error && data) {
-        const processedData = data
-          .map(obligation => {
-            let occurrences = [];
-            let progressRecords = [];
-            
-            if (!isAdmin && userRegionId) {
-              occurrences = obligation.obligation_occurrences?.filter(
-                o => o.region_id === userRegionId
-              ) || [];
-              progressRecords = obligation.obligation_progress?.filter(
-                p => p.region_id === userRegionId
-              ) || [];
-            } else if (isAdmin) {
-              occurrences = obligation.obligation_occurrences || [];
-              progressRecords = obligation.obligation_progress || [];
-            }
-
-            const currentOccurrence = occurrences.find(o => {
-              if (!o.instance_date) return false;
-              const instDate = new Date(o.instance_date);
-              return instDate.getFullYear() === currentDate.getFullYear() && 
-                     instDate.getMonth() === currentDate.getMonth();
-            });
-
-            const latestOccurrence = occurrences.length > 0 
-              ? [...occurrences].sort((a, b) => new Date(b.instance_date) - new Date(a.instance_date))[0]
-              : null;
-
-            const latestProgress = progressRecords.length > 0
-              ? [...progressRecords].sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0]
-              : null;
-
-            let status = 'Open';
-            
-            if (currentOccurrence) {
-              status = currentOccurrence.status || 'Open';
-            } else if (latestOccurrence) {
-              status = latestOccurrence.status || 'Open';
-            } else if (latestProgress) {
-              const progressStatus = latestProgress.status;
-              if (progressStatus === 'Completed') {
-                status = 'Closed';
-              } else if (progressStatus === 'In Progress' || progressStatus === 'Pending' || progressStatus === 'Submitted') {
-                status = 'Submitted/Under Review';
-              } else if (progressStatus === 'Open' || progressStatus === 'Not Started') {
-                status = 'Open';
-              } else {
-                status = progressStatus || 'Open';
-              }
-            } else if (obligation.current_status) {
-              status = obligation.current_status;
-            }
-
-            if (isAdmin && !currentOccurrence && occurrences.length === 0 && !latestProgress) {
-              return {
-                ...obligation,
-                current_status: obligation.current_status || 'Open',
-                progress_id: null,
-                progress_status: null,
-                has_progress: false,
-                occurrences: [],
-                current_occurrence: null,
-              };
-            }
-
-            if (!isAdmin && userRegionId && occurrences.length === 0 && progressRecords.length === 0) {
-              return null;
-            }
-
-            const dueDate = currentOccurrence?.due_date || 
-                            latestOccurrence?.due_date || 
-                            obligation.calculated_due_date;
-
-            return {
-              ...obligation,
-              current_status: status,
-              progress_id: currentOccurrence?.id || latestProgress?.id || null,
-              progress_status: currentOccurrence?.status || latestProgress?.status || null,
-              completed_at: currentOccurrence?.completed_at || latestProgress?.completed_at || null,
-              started_at: currentOccurrence?.started_at || latestProgress?.started_at || null,
-              last_updated_at: currentOccurrence?.updated_at || latestProgress?.updated_at || null,
-              progress_comments: currentOccurrence?.comments || latestProgress?.comments || null,
-              has_progress: !!(currentOccurrence || latestProgress),
-              occurrences: occurrences,
-              current_occurrence: currentOccurrence,
-              calculated_due_date: dueDate,
-            };
-          })
-          .filter(obligation => obligation !== null);
-
-        setObligations(processedData);
+      const result = await getObligations(filters, userRegion, isAdmin);
+      
+      if (result.error) {
+        console.error("❌ Error fetching obligations:", result.error);
+        showMessage("Failed to load obligations. Please refresh the page.", "error");
+        setObligations([]);
+      } else {
+        console.log('✅ Obligations fetched successfully:', result.data?.length || 0, 'records');
+        
+        if (result.data && result.data.length > 0) {
+          console.log('📅 Sample obligation calculated_due_date:', result.data[0].calculated_due_date);
+          console.log('📅 Sample obligation occurrence_date:', result.data[0].occurrence_date);
+          console.log('📅 Sample obligation frequency:', result.data[0].frequency);
+          console.log('📅 Sample obligation current_status:', result.data[0].current_status);
+        }
+        
+        setObligations(result.data || []);
       }
     } catch (error) {
-      console.error("Error fetching obligations:", error);
-      toast.error("Failed to load obligations. Please refresh the page.");
+      console.error("❌ Error fetching obligations:", error);
+      showMessage("Failed to load obligations. Please refresh the page.", "error");
+      setObligations([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // Function to add an event obligation to the to do tab
-  const handleAddEventObligation = async (eventObligation) => {
-    try {
-      setAddLoading(true);
-      
-      const regionId = await getRegionId(userRegion || eventObligation.region);
-      
-      let obligationId = eventObligation.obligation_id;
-      if (!obligationId) {
-        const existingIds = obligations
-          .map((o) => o.obligation_id)
-          .filter((id) => id && id.startsWith("MS-"))
-          .map((id) => parseInt(id.replace("MS-", "")))
-          .filter((num) => !isNaN(num));
-        const maxId = existingIds.length > 0 ? Math.max(...existingIds) : 0;
-        const nextId = maxId + 1;
-        obligationId = `MS-${String(nextId).padStart(3, "0")}`;
-      }
+  // Add event obligation - FIXED
+const handleAddEventObligation = async (eventObligation) => {
+  try {
+    setAddLoading(true);
+    setAddError("");
+    
+    const regionId = await getRegionId(userRegion || eventObligation.region);
+    
+    // Generate obligation ID if not provided
+    let obligationId = eventObligation.obligation_id;
+    if (!obligationId) {
+      const existingIds = obligations
+        .map((o) => o.obligation_id)
+        .filter((id) => id && id.startsWith("MS-"))
+        .map((id) => parseInt(id.replace("MS-", "")))
+        .filter((num) => !isNaN(num));
+      const maxId = existingIds.length > 0 ? Math.max(...existingIds) : 0;
+      const nextId = maxId + 1;
+      obligationId = `MS-${String(nextId).padStart(3, "0")}`;
+    }
 
-      const { data: existing, error: checkError } = await supabase
-        .from("obligations")
-        .select("obligation_id")
+    // Check if obligation already exists in compliance_obligations
+    const { data: existing, error: checkError } = await supabase
+      .from("compliance_obligations")
+      .select("obligation_id")
+      .eq("obligation_id", obligationId)
+      .single();
+
+    let obligationExists = false;
+    let obligationData = null;
+
+    if (existing) {
+      // Obligation exists in compliance_obligations
+      obligationExists = true;
+      console.log('📋 Obligation already exists in compliance_obligations:', obligationId);
+      
+      // Get the full obligation data
+      const { data: existingObligation, error: fetchError } = await supabase
+        .from("compliance_obligations")
+        .select("*")
         .eq("obligation_id", obligationId)
         .single();
-
-      if (existing) {
-        toast.warning(`Obligation ${obligationId} already exists.`);
-        setAddLoading(false);
-        return;
+      
+      if (fetchError) {
+        throw fetchError;
       }
-
+      obligationData = existingObligation;
+    } else {
+      // Insert into compliance_obligations
       const { data, error } = await supabase
-        .from("obligations")
+        .from("compliance_obligations")
         .insert({
           obligation_id: obligationId,
-          policy_id: eventObligation.policy_id || null,
+          policy: eventObligation.policy || "",
           clause: eventObligation.clause || "",
           domain: eventObligation.domain || "",
-          name: eventObligation.name || "",
+          obligation_name: eventObligation.name || "",
           description: eventObligation.description || "",
           responsible: eventObligation.responsible || "",
           accountable: eventObligation.accountable || "",
@@ -485,140 +356,92 @@ const ComplianceRegister = () => {
           manual_upload_required: eventObligation.manual_upload_required || false,
           mandatory: eventObligation.mandatory || false,
           compliance_weight: parseInt(eventObligation.compliance_weight) || 1,
-          current_status: 'Open',
           region: eventObligation.region || userRegion || "",
           calculated_due_date: eventObligation.calculated_due_date || null,
           obligation_type: "Event",
         })
         .select();
 
-      if (error) throw error;
-
-      if (regionId && data && data[0]) {
-        await supabase
-          .from('obligation_progress')
-          .insert({
-            obligation_id: data[0].id,
-            region_id: regionId,
-            status: 'Not Started',
-          });
+      if (error) {
+        console.error('Error inserting obligation:', error);
+        throw error;
       }
-
-      if (regionId && data && data[0]) {
-        const currentDate = new Date();
-        const dueDate = eventObligation.calculated_due_date || 
-                       new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
-        
-        await supabase
-          .from('obligation_occurrences')
-          .insert({
-            obligation_id: data[0].id,
-            region_id: regionId,
-            instance_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
-            due_date: dueDate,
-            status: 'Open',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          });
-      }
-
-      toast.success(`Event obligation "${eventObligation.name}" added successfully!`);
-      
-      await fetchObligations();
-      
-    } catch (error) {
-      console.error("Error adding event obligation:", error);
-      toast.error(`❌ ${error.message || "Failed to add event obligation."}`);
-    } finally {
-      setAddLoading(false);
+      obligationData = data[0];
     }
-  };
 
-  // Function to update obligation status in obligation_occurrences
-  const updateObligationStatus = async (obligationId, status, comment = '') => {
-    try {
-      const regionId = await getRegionId(userRegion);
-      
-      if (!regionId && !isAdmin) {
-        toast.error("Region not found for user.");
-        return false;
+    // Check if progress record already exists for this obligation and region
+    if (regionId && obligationData) {
+      const { data: existingProgress, error: progressCheckError } = await supabase
+        .from("compliance_progress")
+        .select("id")
+        .eq("obligation_id", obligationData.obligation_id)
+        .eq("region_id", regionId)
+        .maybeSingle();
+
+      if (progressCheckError) {
+        console.error('Error checking progress:', progressCheckError);
+        throw progressCheckError;
       }
 
+      if (existingProgress) {
+        // Progress already exists - just show a message
+        showMessage(`Event obligation "${eventObligation.name}" already has progress records.`, "info");
+        setAddLoading(false);
+        await fetchObligations();
+        await fetchAllEventObligations();
+        return;
+      }
+
+      // Insert into compliance_progress with status 'Open'
       const currentDate = new Date();
-      const { data: occurrence, error: occurrenceError } = await supabase
-        .from('obligation_occurrences')
-        .select('id')
-        .eq('obligation_id', obligationId)
-        .eq('region_id', regionId)
-        .gte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0])
-        .lte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0])
-        .single();
-
-      if (occurrenceError && occurrenceError.code !== 'PGRST116') {
-        console.error('Error finding occurrence:', occurrenceError);
-        toast.error('No occurrence found for this month.');
-        return false;
-      }
-
-      if (!occurrence) {
-        toast.error('No occurrence found for this month.');
-        return false;
-      }
-
-      const { error: updateError } = await supabase
-        .from('obligation_occurrences')
-        .update({
-          status: status,
-          updated_at: new Date().toISOString(),
-          ...(status === 'Closed' && { completed_at: new Date().toISOString() }),
-          ...(status === 'Submitted/Under Review' && { started_at: new Date().toISOString() }),
-          ...(comment && { comments: comment }),
-        })
-        .eq('id', occurrence.id);
-
-      if (updateError) throw updateError;
-
-      await supabase
-        .from('obligation_progress')
-        .update({
-          current_status: status === 'Closed' ? 'Completed' : status === 'Submitted/Under Review' ? 'In Progress' : 'Not Started',
+      const { error: progressError } = await supabase
+        .from('compliance_progress')
+        .insert({
+          obligation_id: obligationData.obligation_id,
+          region_id: regionId,
+          occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
+          status: 'Open',
+          created_at: new Date().toISOString(),
           updated_at: new Date().toISOString()
-        })
-        .eq('obligation_id', obligationId)
-        .eq('region_id', regionId);
+        });
 
-      return true;
-    } catch (error) {
-      console.error('Error updating obligation status:', error);
-      return false;
+      if (progressError) {
+        console.error('Error inserting progress:', progressError);
+        // If progress insert fails, delete the obligation only if we just created it
+        if (!obligationExists) {
+          await supabase
+            .from("compliance_obligations")
+            .delete()
+            .eq("obligation_id", obligationId);
+        }
+        throw progressError;
+      }
+
+      showMessage(`Event obligation "${eventObligation.name}" added successfully with status "Open"!`, "success");
+    } else {
+      showMessage(`Event obligation "${eventObligation.name}" added successfully!`, "success");
     }
-  };
+
+    await fetchObligations();
+    await fetchAllEventObligations();
+    
+  } catch (error) {
+    console.error("Error adding event obligation:", error);
+    setAddError(error.message || "Failed to add event obligation.");
+    showMessage(`❌ ${error.message || "Failed to add event obligation."}`, "error");
+  } finally {
+    setAddLoading(false);
+  }
+};
 
   const fetchPolicies = async () => {
     try {
-      const { data, error } = await supabase
-        .from("policies")
-        .select("id, name, version")
-        .order("name");
-      if (!error && data) {
-        setPolicies(data);
+      const result = await getPolicies();
+      if (result.data) {
+        setPolicies(result.data);
       }
     } catch (error) {
       console.error("Error fetching policies:", error);
-    }
-  };
-
-  const fetchEventTemplates = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("event_templates")
-        .select("*")
-        .order("name");
-      if (!error && data) {
-        setEventTemplates(data);
-      }
-    } catch (error) {
-      console.error("Error fetching event templates:", error);
     }
   };
 
@@ -626,7 +449,7 @@ const ComplianceRegister = () => {
     try {
       const { data, error } = await supabase
         .from("event_obligations")
-        .select("name, obligation_id, clause, domain, description, responsible, accountable, frequency, due_date_rule, evidence_required, evidence_type, source_system, portal_action, manual_upload_required, mandatory, compliance_weight, region, calculated_due_date, policy_id")
+        .select("name, obligation_id, clause, domain, description, responsible, accountable, frequency, due_date_rule, evidence_required, evidence_type, source_system, portal_action, manual_upload_required, mandatory, compliance_weight, region, calculated_due_date")
         .order("name");
 
       if (!error && data) {
@@ -640,7 +463,7 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Updated status badge for new status system
+  // Status badge
   const getStatusBadge = (status) => {
     const badges = {
       'Open': "bg-gray-100 text-gray-800",
@@ -730,7 +553,7 @@ const ComplianceRegister = () => {
   const handleNameSelect = async (selectedName) => {
     setAddFormData(prev => ({
       ...prev,
-      name: selectedName,
+      obligation_name: selectedName,
     }));
     setNameSearchTerm(selectedName);
     setFilteredNameOptions(obligationNameOptions);
@@ -741,7 +564,7 @@ const ComplianceRegister = () => {
       setAddFormData(prev => ({
         ...prev,
         obligation_id: obligationData.obligation_id || prev.obligation_id,
-        policy_id: obligationData.policy_id || prev.policy_id,
+        policy: obligationData.policy || prev.policy,
         clause: obligationData.clause || prev.clause,
         domain: obligationData.domain || prev.domain,
         description: obligationData.description || prev.description,
@@ -765,10 +588,10 @@ const ComplianceRegister = () => {
   const handleAddClick = (type) => {
     setAddFormData({
       obligation_id: "",
-      policy_id: null,
+      policy: "",
       clause: "",
       domain: "",
-      name: "",
+      obligation_name: "",
       description: "",
       responsible: "",
       accountable: "",
@@ -803,44 +626,6 @@ const ComplianceRegister = () => {
     }));
   };
 
-  const handleTemplateSelect = (e) => {
-    const templateId = e.target.value;
-    if (!templateId) {
-      setSelectedTemplate(null);
-      return;
-    }
-
-    const template = eventTemplates.find(t => t.id === templateId);
-    if (template) {
-      setSelectedTemplate(template);
-      setAddFormData(prev => ({
-        ...prev,
-        obligation_id: template.obligation_id || "",
-        name: template.name || "",
-        description: template.description || "",
-        domain: template.domain || "",
-        responsible: template.responsible || "",
-        accountable: template.accountable || "",
-        frequency: template.frequency || "Event Based",
-        due_date_rule: template.due_date_rule || "",
-        evidence_required: template.evidence_required || false,
-        evidence_type: template.evidence_type || "",
-        source_system: template.source_system || "",
-        portal_action: template.portal_action || "Upload",
-        manual_upload_required: template.manual_upload_required || false,
-        mandatory: template.mandatory || false,
-        compliance_weight: template.compliance_weight || 1,
-        clause: template.clause || "",
-        calculated_due_date: template.calculated_due_date || "",
-        policy_id: template.policy_id || null,
-        region: template.region || userRegion || "",
-        obligation_type: "Event",
-      }));
-      setNameSearchTerm(template.name || "");
-      setShowNameDropdown(false);
-    }
-  };
-
   const generateObligationId = () => {
     const existingIds = obligations
       .map((o) => o.obligation_id)
@@ -866,16 +651,14 @@ const ComplianceRegister = () => {
       }
 
       const { data: existing, error: checkError } = await supabase
-        .from("obligations")
+        .from("compliance_obligations")
         .select("obligation_id")
         .eq("obligation_id", obligationId)
         .single();
 
       if (existing) {
-        setAddError(
-          `Obligation ID ${obligationId} already exists. Please use a different ID.`,
-        );
-        toast.warning(`Obligation ID ${obligationId} already exists.`);
+        setAddError(`Obligation ID ${obligationId} already exists.`);
+        showMessage(`Obligation ID ${obligationId} already exists.`, "warning");
         setAddLoading(false);
         return;
       }
@@ -883,13 +666,13 @@ const ComplianceRegister = () => {
       const regionId = await getRegionId(addFormData.region || userRegion);
 
       const { data, error } = await supabase
-        .from("obligations")
+        .from("compliance_obligations")
         .insert({
           obligation_id: obligationId,
-          policy_id: addFormData.policy_id || null,
+          policy: addFormData.policy || "",
           clause: addFormData.clause,
           domain: addFormData.domain,
-          name: addFormData.name,
+          obligation_name: addFormData.obligation_name,
           description: addFormData.description,
           responsible: addFormData.responsible,
           accountable: addFormData.accountable,
@@ -902,7 +685,6 @@ const ComplianceRegister = () => {
           manual_upload_required: addFormData.manual_upload_required,
           mandatory: addFormData.mandatory,
           compliance_weight: parseInt(addFormData.compliance_weight),
-          current_status: 'Open',
           region: addFormData.region || userRegion,
           calculated_due_date: addFormData.calculated_due_date || null,
           obligation_type: addFormData.obligation_type,
@@ -911,27 +693,14 @@ const ComplianceRegister = () => {
 
       if (error) throw error;
 
-      if (regionId && data && data[0]) {
-        await supabase
-          .from('obligation_progress')
-          .insert({
-            obligation_id: data[0].id,
-            region_id: regionId,
-            status: 'Not Started',
-          });
-      }
-
       if (addFormData.obligation_type === "Event" && regionId && data && data[0]) {
         const currentDate = new Date();
-        const dueDate = addFormData.calculated_due_date || new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
-        
         await supabase
-          .from('obligation_occurrences')
+          .from('compliance_progress')
           .insert({
-            obligation_id: data[0].id,
+            obligation_id: data[0].obligation_id,
             region_id: regionId,
-            instance_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
-            due_date: dueDate,
+            occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
             status: 'Open',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
@@ -939,15 +708,15 @@ const ComplianceRegister = () => {
       }
 
       setAddSuccess(`Obligation ${obligationId} created successfully!`);
-      toast.success(`Obligation ${obligationId} created successfully!`);
+      showMessage(`Obligation ${obligationId} created successfully!`, "success");
       
       setShowAddModal(false);
       setAddFormData({
         obligation_id: "",
-        policy_id: null,
+        policy: "",
         clause: "",
         domain: "",
-        name: "",
+        obligation_name: "",
         description: "",
         responsible: "",
         accountable: "",
@@ -975,10 +744,8 @@ const ComplianceRegister = () => {
       
     } catch (error) {
       console.error("Error creating obligation:", error);
-      setAddError(
-        error.message || "Failed to create obligation. Please try again.",
-      );
-      toast.error(`❌ ${error.message || "Failed to create obligation. Please try again."}`);
+      setAddError(error.message || "Failed to create obligation.");
+      showMessage(`❌ ${error.message || "Failed to create obligation."}`, "error");
       setAddLoading(false);
     }
   };
@@ -986,7 +753,7 @@ const ComplianceRegister = () => {
   const handleEditClick = (obligation) => {
     setEditingObligation(obligation);
     setEditFormData({
-      name: obligation.name || "",
+      obligation_name: obligation.obligation_name || "",
       description: obligation.description || "",
       domain: obligation.domain || "",
       frequency: obligation.frequency || "",
@@ -1022,9 +789,9 @@ const ComplianceRegister = () => {
 
     try {
       const { data, error } = await supabase
-        .from("obligations")
+        .from("compliance_obligations")
         .update({
-          name: editFormData.name,
+          obligation_name: editFormData.obligation_name,
           description: editFormData.description,
           domain: editFormData.domain,
           frequency: editFormData.frequency,
@@ -1051,25 +818,26 @@ const ComplianceRegister = () => {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
           const currentDate = new Date();
-          const { data: occurrence } = await supabase
-            .from('obligation_occurrences')
+          const startDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0];
+          const endDate = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
+
+          const { data: progress } = await supabase
+            .from('compliance_progress')
             .select('id')
-            .eq('obligation_id', editingObligation.id)
+            .eq('obligation_id', editingObligation.obligation_id)
             .eq('region_id', regionId)
-            .gte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0])
-            .lte('instance_date', new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0])
+            .gte('occurrence_date', startDate)
+            .lte('occurrence_date', endDate)
             .single();
 
-          if (occurrence) {
+          if (progress) {
             await supabase
-              .from('obligation_occurrences')
+              .from('compliance_progress')
               .update({
                 status: editFormData.current_status,
                 updated_at: new Date().toISOString(),
-                ...(editFormData.current_status === 'Closed' && { completed_at: new Date().toISOString() }),
-                ...(editFormData.current_status === 'Submitted/Under Review' && { started_at: new Date().toISOString() }),
               })
-              .eq('id', occurrence.id);
+              .eq('id', progress.id);
           }
         }
       }
@@ -1078,13 +846,11 @@ const ComplianceRegister = () => {
       setShowEditModal(false);
       setEditingObligation(null);
       setEditLoading(false);
-      toast.success(`✅ Obligation updated successfully!`);
+      showMessage(`✅ Obligation updated successfully!`, "success");
     } catch (error) {
       console.error("Error updating obligation:", error);
-      setEditError(
-        error.message || "Failed to update obligation. Please try again.",
-      );
-      toast.error(`❌ ${error.message || "Failed to update obligation. Please try again."}`);
+      setEditError(error.message || "Failed to update obligation.");
+      showMessage(`❌ ${error.message || "Failed to update obligation."}`, "error");
       setEditLoading(false);
     }
   };
@@ -1103,17 +869,12 @@ const ComplianceRegister = () => {
       const obligationId = deletingObligation.obligation_id;
       
       await supabase
-        .from('obligation_occurrences')
+        .from('compliance_progress')
         .delete()
-        .eq('obligation_id', deletingObligation.id);
-
-      await supabase
-        .from('obligation_progress')
-        .delete()
-        .eq('obligation_id', deletingObligation.id);
+        .eq('obligation_id', deletingObligation.obligation_id);
 
       const { error: deleteError } = await supabase
-        .from("obligations")
+        .from("compliance_obligations")
         .delete()
         .eq("id", deletingObligation.id);
 
@@ -1125,13 +886,11 @@ const ComplianceRegister = () => {
       setShowDeleteModal(false);
       setDeletingObligation(null);
       setDeleteLoading(false);
-      toast.success(`Obligation ${obligationId} deleted successfully!`);
+      showMessage(`Obligation ${obligationId} deleted successfully!`, "success");
     } catch (error) {
       console.error("Error deleting obligation:", error);
-      setDeleteError(
-        error.message || "Failed to delete obligation. Please try again.",
-      );
-      toast.error(`❌ ${error.message || "Failed to delete obligation. Please try again."}`);
+      setDeleteError(error.message || "Failed to delete obligation.");
+      showMessage(`❌ ${error.message || "Failed to delete obligation."}`, "error");
       setDeleteLoading(false);
     }
   };
@@ -1146,12 +905,13 @@ const ComplianceRegister = () => {
     setSortField(null);
     setSortDirection('asc');
     navigate('/compliance', { replace: true });
-    toast.info("Filters cleared");
+    showMessage("Filters cleared", "info");
   };
 
   const clearEventFilters = () => {
     setEventSearchTerm("");
     setEventFilterDomain("all");
+    showMessage("Event filters cleared", "info");
   };
 
   const handleSort = (field) => {
@@ -1182,62 +942,103 @@ const ComplianceRegister = () => {
     );
   };
 
-  // Toggle obligation name expansion
   const toggleObligationName = (id) => {
     setExpandedObligationId(expandedObligationId === id ? null : id);
   };
 
-  // Get filtered and sorted obligations with occurrences for all months
+  // Get filtered and sorted obligations
   const getFilteredAndSortedObligations = () => {
-    let filtered = obligations;
+    console.log('📋 Filtering obligations with:', {
+      activeTab,
+      filterStatus,
+      filterFrequency,
+      filterDomain,
+      filterMonth,
+      filterYear,
+      searchTerm,
+      totalObligations: obligations.length
+    });
 
+    let filtered = [...obligations];
+
+    // Filter by obligation type based on tab
     if (activeTab === "todo") {
-      // Show both Cyclic and Event based obligations
       filtered = filtered.filter(o => o.obligation_type === "Cyclic" || o.obligation_type === "Event");
     } else if (activeTab === "eventlist") {
       filtered = filtered.filter(o => o.obligation_type === "Event");
     }
 
-    // Generate occurrences for each obligation based on month/year filter
-    const allOccurrences = [];
-    filtered.forEach(obligation => {
-      // If month/year filter is applied, only generate occurrences for that month/year
-      const occurrences = generateOccurrencesForObligation(obligation, 24);
-      allOccurrences.push(...occurrences);
-    });
-    
-    // If there are no filtered occurrences, return empty array
-    if (allOccurrences.length === 0 && (filterMonth || filterYear)) {
-      return [];
-    }
-    
-    // If no month/year filter, use all occurrences
-    if (!filterMonth && !filterYear) {
-      filtered = allOccurrences;
-    } else {
-      // Use the filtered occurrences
-      filtered = allOccurrences;
-    }
-
-    // Apply additional filters
-    filtered = filtered.filter((item) => {
-      const name = item.name || '';
-      const description = item.description || '';
-      const obligationId = item.obligation_id || '';
+    if (filtered.length > 0) {
+      console.log('📅 Sample filtered obligation calculated_due_date:', filtered[0]?.calculated_due_date);
+      console.log('📅 Sample filtered obligation occurrence_date:', filtered[0]?.occurrence_date);
+      console.log('📅 Sample filtered obligation current_status:', filtered[0]?.current_status);
       
-      const matchesSearch = searchTerm === "" ||
-        name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        description.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        obligationId.toLowerCase().includes(searchTerm.toLowerCase());
+      const years = new Set();
+      filtered.forEach(o => {
+        if (o.calculated_due_date) {
+          const year = new Date(o.calculated_due_date).getFullYear();
+          years.add(year);
+        }
+      });
+      console.log('📅 Years present in calculated_due_date:', [...years]);
+    }
 
-      const matchesStatus = filterStatus === "all" || item.current_status === filterStatus || item.occurrence_status === filterStatus;
-      const matchesFrequency = filterFrequency === "all" || item.frequency === filterFrequency;
-      const matchesDomain = filterDomain === "all" || item.domain === filterDomain;
+    // Apply search filter
+    if (searchTerm) {
+      const searchLower = searchTerm.toLowerCase();
+      filtered = filtered.filter((item) => {
+        const name = item.obligation_name || '';
+        const description = item.description || '';
+        const obligationId = item.obligation_id || '';
+        
+        return name.toLowerCase().includes(searchLower) ||
+          description.toLowerCase().includes(searchLower) ||
+          obligationId.toLowerCase().includes(searchLower);
+      });
+    }
 
-      return matchesSearch && matchesStatus && matchesFrequency && matchesDomain;
-    });
+    // Apply status filter
+    if (filterStatus && filterStatus !== 'all') {
+      filtered = filtered.filter((item) => {
+        const status = item.current_status || 'Open';
+        return status === filterStatus;
+      });
+    }
 
-    // Sort by due date if sorting is enabled
+    // Apply frequency filter
+    if (filterFrequency && filterFrequency !== 'all') {
+      filtered = filtered.filter((item) => {
+        return item.frequency === filterFrequency;
+      });
+    }
+
+    // Apply domain filter
+    if (filterDomain && filterDomain !== 'all') {
+      filtered = filtered.filter((item) => {
+        return item.domain === filterDomain;
+      });
+    }
+
+    // Apply month/year filter
+    if (filterMonth || filterYear) {
+      filtered = filtered.filter((item) => {
+        const dueDate = item.calculated_due_date;
+        if (!dueDate) return false;
+        
+        const [year, month] = dueDate.split('-');
+        let matches = true;
+        
+        if (filterYear) {
+          matches = matches && year === filterYear;
+        }
+        if (filterMonth) {
+          matches = matches && month === filterMonth;
+        }
+        return matches;
+      });
+    }
+
+    // Apply sorting
     if (sortField === 'dueDate') {
       filtered.sort((a, b) => {
         const dateA = a.calculated_due_date ? new Date(a.calculated_due_date) : new Date(0);
@@ -1251,14 +1052,15 @@ const ComplianceRegister = () => {
         'Open': 3,
       };
       filtered.sort((a, b) => {
-        const aStatus = a.current_status || a.occurrence_status || 'Open';
-        const bStatus = b.current_status || b.occurrence_status || 'Open';
+        const aStatus = a.current_status || 'Open';
+        const bStatus = b.current_status || 'Open';
         const aVal = statusOrder[aStatus] || 999;
         const bVal = statusOrder[bStatus] || 999;
         return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
       });
     }
 
+    console.log(`📊 Filtered ${filtered.length} obligations`);
     return filtered;
   };
 
@@ -1285,10 +1087,7 @@ const ComplianceRegister = () => {
   const filteredEventObligations = getFilteredEventObligations();
 
   const getTodoCount = () => {
-    // Count unique obligations (not occurrences) in the To Do tab
-    // Get all obligations that are Cyclic or Event type
     const todoObligations = obligations.filter(o => o.obligation_type === "Cyclic" || o.obligation_type === "Event");
-    // Return the count of unique obligations
     return todoObligations.length;
   };
 
@@ -1312,12 +1111,12 @@ const ComplianceRegister = () => {
 
   // Render tooltip for obligation details
   const renderTooltip = (obligation, dueDateColor, dueDate) => {
-    const status = obligation.current_status || obligation.occurrence_status || 'Open';
+    const status = obligation.current_status || 'Open';
     return (
       <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
         <div className="space-y-1.5">
           <div className="flex justify-between items-start">
-            <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.name}</h4>
+            <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.obligation_name}</h4>
             <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(status)}`}>
               {status}
             </span>
@@ -1344,12 +1143,6 @@ const ComplianceRegister = () => {
               <span className="font-medium text-gray-500">Due:</span>
               <span className={`ml-1 ${dueDateColor}`}>{formatDate(dueDate)}</span>
             </div>
-            {obligation.month && obligation.year && (
-              <div className="col-span-2">
-                <span className="font-medium text-gray-500">Instance:</span>
-                <span className="ml-1 text-gray-700">{obligation.month}/{obligation.year}</span>
-              </div>
-            )}
             <div>
               <span className="font-medium text-gray-500">Responsible:</span>
               <span className="ml-1 text-gray-700">{obligation.responsible}</span>
@@ -1477,7 +1270,44 @@ const ComplianceRegister = () => {
   }
 
   return (
-    <div className="space-y-4 px-2 sm:px-3">
+    <div className="space-y-4 px-2 sm:px-3 relative">
+      {/* Center Message */}
+      {message.visible && (
+        <div className="fixed inset-0 flex items-center justify-center z-[9999] pointer-events-none">
+          <div className={`px-6 py-4 rounded-lg shadow-2xl max-w-md w-full text-center pointer-events-auto ${
+            message.type === 'success' ? 'bg-green-500' :
+            message.type === 'error' ? 'bg-red-500' :
+            message.type === 'warning' ? 'bg-yellow-500' :
+            'bg-blue-500'
+          } text-white`}>
+            <div className="flex items-center justify-center">
+              {message.type === 'success' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+              {message.type === 'error' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              {message.type === 'warning' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              )}
+              {message.type === 'info' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+              <span className="font-medium">{message.text}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Header */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900">
@@ -1681,8 +1511,8 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Filters - Only show for To Do tab */}
-      {activeTab === "todo" && filteredObligations.length > 0 && (
+      {/* Filters - Only show for To Do tab - ALWAYS SHOW */}
+      {activeTab === "todo" && (
         <div className="bg-white rounded-lg shadow p-3">
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3">
             <div>
@@ -1773,7 +1603,7 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Event List Tab - Show ALL Event Obligations */}
+      {/* Event List Tab */}
       {activeTab === "eventlist" && (
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="overflow-x-auto">
@@ -1801,9 +1631,7 @@ const ComplianceRegister = () => {
                 {filteredEventObligations.length === 0 ? (
                   <tr>
                     <td colSpan="5" className="px-2 py-8 text-center text-gray-500 text-sm">
-                      {eventSearchTerm || eventFilterDomain !== "all" 
-                        ? "No event obligations match your filters."
-                        : "No event obligations available."}
+                      No event obligations available.
                     </td>
                   </tr>
                 ) : (
@@ -1837,7 +1665,6 @@ const ComplianceRegister = () => {
                         <div className="text-[10px] text-gray-500 truncate">
                           ID: {event.obligation_id || 'N/A'}
                         </div>
-                        {/* Expanded Name - shows full name when clicked */}
                         {expandedObligationId === event.id && (
                           <div 
                             className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
@@ -1847,7 +1674,6 @@ const ComplianceRegister = () => {
                             <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
                           </div>
                         )}
-                        {/* Hover Tooltip for Event */}
                         {hoveredObligation === event.id && !expandedObligationId && renderEventTooltip(event)}
                       </td>
                       <td className="px-2 py-2">
@@ -1874,7 +1700,7 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* To Do Tab - Show Added Obligations with Status */}
+      {/* To Do Tab - NO VERTICAL SCROLLING */}
       {activeTab === "todo" && (
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="overflow-x-auto">
@@ -1927,8 +1753,8 @@ const ComplianceRegister = () => {
                     const dueDate = obligation.calculated_due_date;
                     const isOverdue = isDueDateOverdue(dueDate);
                     const dueDateColor = getDueDateColor(dueDate);
-                    const status = obligation.current_status || obligation.occurrence_status || 'Open';
-                    const uniqueKey = obligation.id + (obligation.instance_date || index);
+                    const status = obligation.current_status || 'Open';
+                    const uniqueKey = `${obligation.id}-${index}`;
 
                     return (
                       <tr
@@ -1976,17 +1802,17 @@ const ComplianceRegister = () => {
                           <div 
                             className="text-xs sm:text-sm font-medium text-gray-900 truncate cursor-pointer hover:text-[#8cc63e] transition-colors"
                             onClick={() => toggleObligationName(uniqueKey)}
-                            title={obligation.name}
+                            title={obligation.obligation_name}
                           >
-                            {obligation.name}
+                            {obligation.obligation_name}
                             {obligation.obligation_type === "Event" && (
                               <span className="ml-1 text-[10px] text-orange-500 font-normal">
                                 (Event)
                               </span>
                             )}
-                            {obligation.month && obligation.year && (
+                            {obligation.occurrence_date && (
                               <span className="ml-1 text-[10px] text-gray-400 font-normal">
-                                ({obligation.month}/{obligation.year})
+                                (Occurrence: {formatDate(obligation.occurrence_date)})
                               </span>
                             )}
                           </div>
@@ -1994,18 +1820,16 @@ const ComplianceRegister = () => {
                             {obligation.description?.substring(0, 40)}...
                           </div>
                           
-                          {/* Expanded Name - shows full name when clicked */}
                           {expandedObligationId === uniqueKey && (
                             <div 
                               className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
                               onClick={() => toggleObligationName(uniqueKey)}
                             >
-                              <p className="text-sm font-medium text-gray-900 break-words">{obligation.name}</p>
+                              <p className="text-sm font-medium text-gray-900 break-words">{obligation.obligation_name}</p>
                               <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
                             </div>
                           )}
                           
-                          {/* Hover Tooltip */}
                           {hoveredObligation === uniqueKey && !expandedObligationId && renderTooltip(obligation, dueDateColor, dueDate)}
                         </td>
                         <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
@@ -2089,33 +1913,8 @@ const ComplianceRegister = () => {
                 </div>
               )}
 
-              {/* Event template selector */}
-              {addFormData.obligation_type === "Event" && eventTemplates.length > 0 && (
-                <div className="mb-4 p-3 sm:p-4 bg-blue-50 border border-blue-200 rounded-md">
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Select Template (Auto-fill fields below)
-                  </label>
-                  <select
-                    onChange={handleTemplateSelect}
-                    value={selectedTemplate?.id || ""}
-                    className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-                  >
-                    <option value="">Select a template...</option>
-                    {eventTemplates.map((template) => (
-                      <option key={template.id} value={template.id}>
-                        {template.name} ({template.obligation_id})
-                      </option>
-                    ))}
-                  </select>
-                  {selectedTemplate && (
-                    <p className="text-xs text-gray-500 mt-1">
-                      Template selected: {selectedTemplate.name}
-                    </p>
-                  )}
-                </div>
-              )}
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                {/* ... rest of the add modal content remains the same ... */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation ID *
@@ -2125,7 +1924,7 @@ const ComplianceRegister = () => {
                     name="obligation_id"
                     value={addFormData.obligation_id}
                     onChange={handleAddInputChange}
-                    placeholder="e.g., MS-027"
+                    placeholder="e.g., NOM-MS-027"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
                   <p className="text-xs text-gray-500 mt-1 hidden sm:block">
@@ -2135,18 +1934,17 @@ const ComplianceRegister = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Policy *
+                    Policy
                   </label>
                   <select
-                    name="policy_id"
-                    value={addFormData.policy_id || ""}
+                    name="policy"
+                    value={addFormData.policy || ""}
                     onChange={handleAddInputChange}
-                    required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   >
                     <option value="">Select Policy</option>
                     {policies.map((policy) => (
-                      <option key={policy.id} value={policy.id}>
+                      <option key={policy.id} value={policy.name}>
                         {policy.name} - {policy.version}
                       </option>
                     ))}
@@ -2166,7 +1964,7 @@ const ComplianceRegister = () => {
                         const value = e.target.value;
                         setNameSearchTerm(value);
                         handleNameSearch(value);
-                        setAddFormData(prev => ({ ...prev, name: value }));
+                        setAddFormData(prev => ({ ...prev, obligation_name: value }));
                       }}
                       onFocus={() => {
                         if (nameSearchTerm && filteredNameOptions.length > 0) {
@@ -2202,14 +2000,13 @@ const ComplianceRegister = () => {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Clause *
+                    Clause
                   </label>
                   <input
                     type="text"
                     name="clause"
                     value={addFormData.clause}
                     onChange={handleAddInputChange}
-                    required
                     placeholder="e.g., 3.x"
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
                   />
@@ -2527,7 +2324,7 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Edit Modal - Only for Admin */}
+      {/* Edit Modal */}
       {showEditModal && editingObligation && isAdmin && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
@@ -2563,14 +2360,15 @@ const ComplianceRegister = () => {
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
+                {/* ... edit modal content remains the same ... */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation Name *
                   </label>
                   <input
                     type="text"
-                    name="name"
-                    value={editFormData.name}
+                    name="obligation_name"
+                    value={editFormData.obligation_name}
                     onChange={handleEditInputChange}
                     required
                     className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
@@ -2832,7 +2630,7 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Delete Confirmation Modal - Only for Admin */}
+      {/* Delete Confirmation Modal */}
       {showDeleteModal && deletingObligation && isAdmin && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
@@ -2862,8 +2660,7 @@ const ComplianceRegister = () => {
               <p className="text-sm text-gray-500 text-center mb-4">
                 Are you sure you want to delete{" "}
                 <strong>{deletingObligation.obligation_id}</strong>? This action
-                cannot be undone and will also delete all related instances,
-                evidence, and activity history.
+                cannot be undone and will also delete all related progress records.
               </p>
 
               {deleteError && (

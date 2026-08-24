@@ -8,7 +8,7 @@ import ComplianceRisks from "./ComplianceRisks";
 import ComplianceTrend from "./ComplianceTrend";
 import AgingGaps from "./AgingGaps";
 import ManagementActions from "./ManagementActions";
-import ObligationStatus from "./ObligationStatus";
+
 
 const Dashboard = () => {
   const { profile } = useAuth();
@@ -32,11 +32,7 @@ const Dashboard = () => {
         <ComplianceRisks userRegion={userRegion} isAdmin={isAdmin} />
       </div>
 
-      {/* Obligation Status and Aging Gaps in one row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-3 sm:gap-4 md:gap-5 lg:gap-6">
-        <ObligationStatus userRegion={userRegion} isAdmin={isAdmin} />
-        <AgingGaps userRegion={userRegion} isAdmin={isAdmin} />
-      </div>
+      
 
       {/* Management Action Tracker - Full Width */}
       <ManagementActions userRegion={userRegion} isAdmin={isAdmin} />

@@ -6,29 +6,29 @@ const ComplianceFilters = ({
   filterFrequency,
   setFilterFrequency,
 }) => {
-  const statuses = ["all", "completed", "in-progress", "pending", "overdue"];
-  const frequencies = ["all", "monthly", "quarterly", "annual", "event"];
+  // Updated statuses to match obligation_occurrences
+  const statuses = ["all", "Open", "Submitted/Under Review", "Closed"];
+  const frequencies = ["all", "Monthly", "Quarterly", "Annual", "Event Based"];
 
   const getStatusDisplay = (status) => {
     const display = {
       all: "All Statuses",
-      completed: "Completed",
-      "in-progress": "In Progress",
-      pending: "Pending",
-      overdue: "Overdue",
+      Open: "Open",
+      "Submitted/Under Review": "Submitted/Under Review",
+      Closed: "Closed",
     };
-    return display[status] || status.charAt(0).toUpperCase() + status.slice(1);
+    return display[status] || status;
   };
 
   const getFrequencyDisplay = (frequency) => {
     const display = {
       all: "All Frequencies",
-      monthly: "Monthly",
-      quarterly: "Quarterly",
-      annual: "Annual",
-      event: "Event Based",
+      Monthly: "Monthly",
+      Quarterly: "Quarterly",
+      Annual: "Annual",
+      "Event Based": "Event Based",
     };
-    return display[frequency] || frequency.charAt(0).toUpperCase() + frequency.slice(1);
+    return display[frequency] || frequency;
   };
 
   return (

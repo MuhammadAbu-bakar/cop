@@ -2,18 +2,14 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { PieChart, Pie, Cell, ResponsiveContainer } from 'recharts';
 import { 
-  FaArrowUp, 
-  FaArrowDown, 
-  FaMinus,
-  FaExclamationTriangle,
+  FaChartLine, 
+  FaFlag, 
+  FaClock, 
+  FaFileAlt, 
+  FaExclamationTriangle, 
+  FaGlobe,
   FaCheckCircle,
-  FaClock,
-  FaFileAlt,
-  FaExclamationCircle,
-  FaChartLine,
-  FaShieldAlt,
-  FaFlag,
-  FaGlobe
+  FaExclamationCircle
 } from 'react-icons/fa';
 import { getDashboardStats } from "../../api/compliance";
 
@@ -22,7 +18,6 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({
     overallCompliance: 0,
-    auditReadiness: 0,
     totalObligations: 0,
     completed: 0,
     pending: 0,
@@ -33,7 +28,10 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     regionsBelowTarget: 0,
     regionsTotal: 0,
     evidenceCompletion: 0,
+    mandatoryObligations: 0,
+    totalOccurrences: 0,
   });
+  const [debugInfo, setDebugInfo] = useState(null);
 
   useEffect(() => {
     fetchStats();
@@ -42,7 +40,20 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
   const fetchStats = async () => {
     setLoading(true);
     try {
+      console.log('📊 [ComplianceStats] Fetching stats for:', { userRegion, isAdmin });
       const statsData = await getDashboardStats(userRegion, isAdmin);
+      console.log('📊 [ComplianceStats] Stats received:', statsData);
+      
+      // Store debug info
+      setDebugInfo({
+        totalOccurrences: statsData.totalOccurrences,
+        closed: statsData.completed,
+        submitted: statsData.inProgress,
+        open: statsData.pending,
+        overdue: statsData.overdue,
+        evidenceCount: statsData.evidenceCompletion
+      });
+      
       setStats(statsData);
     } catch (error) {
       console.error("Error fetching dashboard stats:", error);
@@ -62,12 +73,12 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
   const getStatIcon = (title, color) => {
     const iconMap = {
       "Overall Compliance": <FaChartLine className="h-4 w-4" style={{ color: color }} />,
-      "Audit Readiness": <FaShieldAlt className="h-4 w-4" style={{ color: color }} />,
-      "Mandatory Obligations": <FaCheckCircle className="h-4 w-4" style={{ color: color }} />,
+      "Mandatory Obligations": <FaFlag className="h-4 w-4" style={{ color: color }} />,
       "Overdue Obligations": <FaClock className="h-4 w-4" style={{ color: color }} />,
       "Evidence Completion": <FaFileAlt className="h-4 w-4" style={{ color: color }} />,
       "High-Risk Gaps": <FaExclamationTriangle className="h-4 w-4" style={{ color: color }} />,
       "Regions Below Target": <FaGlobe className="h-4 w-4" style={{ color: color }} />,
+      "Closed Obligations": <FaCheckCircle className="h-4 w-4" style={{ color: color }} />,
     };
     return iconMap[title] || <FaExclamationCircle className="h-4 w-4" style={{ color: color }} />;
   };
@@ -83,8 +94,8 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     const chartColor = color === "#000072" ? getColor(percentage) : color;
     
     const data = [
-      { name: 'Completed', value: percentage },
-      { name: 'Remaining', value: 100 - percentage }
+      { name: 'Completed', value: Math.min(percentage, 100) },
+      { name: 'Remaining', value: Math.max(0, 100 - Math.min(percentage, 100)) }
     ];
 
     return (
@@ -110,7 +121,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
         </ResponsiveContainer>
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-sm font-bold" style={{ color: chartColor }}>
-            {percentage}%
+            {Math.min(percentage, 100)}%
           </span>
         </div>
       </div>
@@ -120,31 +131,21 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
   const statCards = [
     {
       title: "Overall Compliance",
-      value: `${stats.overallCompliance || 0}%`,
+      value: `${Math.min(stats.overallCompliance || 0, 100)}%`,
       color: "#000072",
       filterType: "all",
       filterValue: null,
       isPrimary: true,
       showDonut: true,
-      percentage: stats.overallCompliance || 0,
+      percentage: Math.min(stats.overallCompliance || 0, 100),
     },
     {
-      title: "Audit Readiness",
-      value: `${stats.auditReadiness || 0}%`,
-      color: "#3b82f6",
-      filterType: null,
-      filterValue: null,
-      showDonut: true,
-      percentage: stats.auditReadiness || 0,
-    },
-    {
-      title: "Mandatory Obligations",
-      value: `${stats.completed || 0} / ${stats.totalObligations || 0}`,
-      subtitle: `${stats.totalObligations > 0 ? Math.round((stats.completed / stats.totalObligations) * 100) : 0}% Compliant`,
+      title: "Closed Obligations",
+      value: stats.completed || 0,
+      subtitle: `Out of ${stats.totalOccurrences || 0} total`,
       color: "#22c55e",
-      filterType: null,
-      filterValue: null,
-      isObligation: true,
+      filterType: "status",
+      filterValue: "Closed",
       showDonut: false,
     },
     {
@@ -158,12 +159,21 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     },
     {
       title: "Evidence Completion",
-      value: `${stats.evidenceCompletion || 0}%`,
+      value: `${Math.min(stats.evidenceCompletion || 0, 100)}%`,
       color: "#8b5cf6",
       filterType: null,
       filterValue: null,
       showDonut: true,
-      percentage: stats.evidenceCompletion || 0,
+      percentage: Math.min(stats.evidenceCompletion || 0, 100),
+    },
+    {
+      title: "Mandatory Obligations",
+      value: stats.mandatoryObligations || 0,
+      subtitle: `${stats.totalOccurrences > 0 ? Math.round((stats.mandatoryObligations / stats.totalOccurrences) * 100) : 0}% of total`,
+      color: "#f59e0b",
+      filterType: null,
+      filterValue: null,
+      showDonut: false,
     },
     {
       title: "High-Risk Gaps",
@@ -176,7 +186,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     },
     {
       title: "Regions Below Target",
-      value: `${stats.regionsBelowTarget || 0} / ${stats.regionsTotal || 6}`,
+      value: `${stats.regionsBelowTarget || 0} / ${stats.regionsTotal || 0}`,
       color: "#ec4899",
       filterType: null,
       filterValue: null,
@@ -212,6 +222,19 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
           Executive Summary
         </h3>
         <p className="text-xs text-gray-500 mt-0.5">Compliance overview at a glance</p>
+        
+        {/* Debug Info - Remove in production */}
+        {debugInfo && (
+          <div className="mt-2 p-2 bg-gray-100 rounded text-xs text-gray-500 overflow-x-auto">
+            <span className="font-medium">Debug:</span> 
+            Total: {debugInfo.totalOccurrences} | 
+            Closed: {debugInfo.closed} | 
+            Submitted: {debugInfo.submitted} | 
+            Open: {debugInfo.open} | 
+            Overdue: {debugInfo.overdue} | 
+            Evidence: {debugInfo.evidenceCount}%
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-3 sm:gap-4">

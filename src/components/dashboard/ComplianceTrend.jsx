@@ -36,6 +36,7 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
         regionId = await getRegionId(userRegion);
       }
 
+      // Generate last 6 months
       const months = [];
       const currentDate = new Date();
       
@@ -46,6 +47,7 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
           month: date.toLocaleString('default', { month: 'short' }),
           year: date.getFullYear(),
           monthIndex: date.getMonth(),
+          monthName: date.toLocaleString('default', { month: 'long' }),
         });
       }
 
@@ -55,34 +57,58 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
         const startDate = new Date(month.year, month.monthIndex, 1);
         const endDate = new Date(month.year, month.monthIndex + 1, 0);
         
-        let query = supabase
-          .from('obligations')
-          .select('id')
-          .gte('created_at', startDate.toISOString())
-          .lte('created_at', endDate.toISOString());
+        // Format dates for comparison
+        const startDateStr = startDate.toISOString().split('T')[0];
+        const endDateStr = endDate.toISOString().split('T')[0];
 
-        const { data: monthObligations } = await query;
-        const obligationIds = monthObligations?.map(o => o.id) || [];
-
+        // Get obligations that have progress in this month
         let progressQuery = supabase
-          .from('obligation_progress')
-          .select('status')
-          .in('obligation_id', obligationIds)
-          .eq('status', 'Completed');
+          .from('compliance_progress')
+          .select('obligation_id, status, occurrence_date, calculated_due_date')
+          .gte('occurrence_date', startDateStr)
+          .lte('occurrence_date', endDateStr);
 
         if (regionId) {
           progressQuery = progressQuery.eq('region_id', regionId);
         }
 
-        const { data: monthCompleted } = await progressQuery;
+        const { data: monthProgress, error: progressError } = await progressQuery;
 
+        if (progressError) {
+          console.error('Error fetching progress for month:', progressError);
+          trendData.push({
+            month: month.month,
+            value: 0,
+          });
+          continue;
+        }
+
+        // Get unique obligation IDs for this month
+        const obligationIds = [...new Set(monthProgress?.map(p => p.obligation_id) || [])];
         const total = obligationIds.length;
-        const completed = monthCompleted?.length || 0;
-        const compliance = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+        // Count closed obligations
+        const closed = monthProgress?.filter(p => p.status === 'Closed').length || 0;
+        
+        // Calculate compliance percentage
+        const compliance = total > 0 ? Math.round((closed / total) * 100) : 0;
+
+        // Alternative: Count unique obligations that are Closed
+        const uniqueClosed = monthProgress?.filter(p => p.status === 'Closed')
+          .map(p => p.obligation_id)
+          .filter((id, index, self) => self.indexOf(id) === index).length || 0;
+        
+        // Use unique closed count for better accuracy
+        const uniqueCompliance = obligationIds.length > 0 
+          ? Math.round((uniqueClosed / obligationIds.length) * 100) 
+          : 0;
 
         trendData.push({
           month: month.month,
-          value: compliance > 0 ? compliance : 0,
+          value: uniqueCompliance > 0 ? uniqueCompliance : 0,
+          total: total,
+          closed: uniqueClosed,
+          inProgress: monthProgress?.filter(p => p.status === 'Submitted/Under Review').length || 0,
         });
       }
 
@@ -129,12 +155,21 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
   // Custom Tooltip
   const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
+      const dataPoint = payload[0].payload;
       return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-lg p-3">
           <p className="text-sm font-medium text-gray-900">{label}</p>
           <p className="text-sm font-bold" style={{ color: '#ff0099' }}>
             {payload[0].value}%
           </p>
+          {dataPoint && (
+            <div className="text-[10px] text-gray-500 mt-1">
+              <p>{dataPoint.closed || 0} of {dataPoint.total || 0} closed</p>
+              {dataPoint.inProgress > 0 && (
+                <p>{dataPoint.inProgress} under review</p>
+              )}
+            </div>
+          )}
         </div>
       );
     }
@@ -145,8 +180,9 @@ const ComplianceTrend = ({ userRegion, isAdmin }) => {
   const formatYAxis = (value) => `${value}%`;
 
   // Get min and max for Y-axis domain
-  const minValue = Math.min(...data.map(d => d.value)) - 5;
-  const maxValue = Math.max(...data.map(d => d.value)) + 5;
+  const allValues = data.map(d => d.value);
+  const minValue = Math.min(...allValues) - 5 < 0 ? 0 : Math.min(...allValues) - 5;
+  const maxValue = Math.max(...allValues) + 5 > 100 ? 100 : Math.max(...allValues) + 5;
 
   return (
     <div className="bg-white rounded-lg shadow p-3 sm:p-4 md:p-5 lg:p-6">

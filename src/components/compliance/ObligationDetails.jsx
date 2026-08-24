@@ -2,21 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../api/supabase";
-import {
-  getEvidence,
-  addComment,
-  getActivityHistory,
-  updateObligationStatus,
-  updateRegionProgress,
-  uploadEvidence,
-  getRegionProgress,
-  submitOccurrenceForReview,
-  getOccurrencesForMonth,
-  getPendingApprovals,
-  approveOccurrence,
-  rejectOccurrence,
-} from "../../api/compliance";
-import { toast } from 'react-toastify';
 
 const ObligationDetails = () => {
   const { id } = useParams();
@@ -29,7 +14,6 @@ const ObligationDetails = () => {
   const templateFileInputRef = useRef(null);
 
   const [obligation, setObligation] = useState(null);
-  const [instances, setInstances] = useState([]);
   const [evidence, setEvidence] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -45,6 +29,18 @@ const ObligationDetails = () => {
   const [regionProgress, setRegionProgress] = useState(null);
   const [occurrences, setOccurrences] = useState([]);
   const [pendingApproval, setPendingApproval] = useState(null);
+  const [progressRecords, setProgressRecords] = useState([]);
+
+  // Message state for center display
+  const [message, setMessage] = useState({ text: "", type: "", visible: false });
+
+  // Show center message
+  const showMessage = (text, type = 'success') => {
+    setMessage({ text, type, visible: true });
+    setTimeout(() => {
+      setMessage({ text: "", type: "", visible: false });
+    }, 5000);
+  };
 
   useEffect(() => {
     if (obligationId) {
@@ -61,6 +57,7 @@ const ObligationDetails = () => {
       fetchRegionProgress();
       fetchOccurrences();
       checkPendingApproval();
+      fetchProgressRecords();
     }
   }, [obligation]);
 
@@ -88,17 +85,49 @@ const ObligationDetails = () => {
     if (!obligation || !userRegion || isAdmin) return;
 
     try {
-      console.log('Fetching progress for region:', userRegion);
-      const result = await getRegionProgress(obligation.id, userRegion);
-      if (result.data) {
-        setRegionProgress(result.data);
-        console.log('Region progress:', result.data);
-      } else {
-        setRegionProgress(null);
-        console.log('No progress found for region:', userRegion);
-      }
+      const regionId = await getRegionId(userRegion);
+      if (!regionId) return;
+
+      const { data, error } = await supabase
+        .from('compliance_progress')
+        .select('*')
+        .eq('obligation_id', obligation.obligation_id)
+        .eq('region_id', regionId)
+        .order('occurrence_date', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+      setRegionProgress(data?.[0] || null);
     } catch (error) {
       console.error('Error fetching region progress:', error);
+    }
+  };
+
+  const fetchProgressRecords = async () => {
+    if (!obligation) return;
+
+    try {
+      let query = supabase
+        .from('compliance_progress')
+        .select(`
+          *,
+          region:regions(id, name, code)
+        `)
+        .eq('obligation_id', obligation.obligation_id)
+        .order('occurrence_date', { ascending: false });
+
+      if (!isAdmin && userRegion) {
+        const regionId = await getRegionId(userRegion);
+        if (regionId) {
+          query = query.eq('region_id', regionId);
+        }
+      }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      setProgressRecords(data || []);
+    } catch (error) {
+      console.error('Error fetching progress records:', error);
     }
   };
 
@@ -112,13 +141,20 @@ const ObligationDetails = () => {
       const currentDate = new Date();
       const year = currentDate.getFullYear();
       const month = currentDate.getMonth();
+      const startDate = new Date(year, month, 1).toISOString().split('T')[0];
+      const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
-      const result = await getOccurrencesForMonth(regionId, year, month);
-      if (result.data) {
-        setOccurrences(result.data);
-      } else {
-        setOccurrences([]);
-      }
+      const { data, error } = await supabase
+        .from('compliance_progress')
+        .select('*')
+        .eq('obligation_id', obligation.obligation_id)
+        .eq('region_id', regionId)
+        .gte('occurrence_date', startDate)
+        .lte('occurrence_date', endDate)
+        .order('occurrence_date', { ascending: true });
+
+      if (error) throw error;
+      setOccurrences(data || []);
     } catch (error) {
       console.error('Error fetching occurrences:', error);
     }
@@ -128,11 +164,28 @@ const ObligationDetails = () => {
     if (!obligation || !isAdmin) return;
 
     try {
-      const result = await getPendingApprovals(null, true);
-      if (result.data) {
-        const pending = result.data.find(o => o.obligation_id === obligation.id);
-        setPendingApproval(pending || null);
-      }
+      const { data, error } = await supabase
+        .from('compliance_progress')
+        .select(`
+          *,
+          evidence:evidence!left(
+            id,
+            file_name,
+            file_url,
+            file_type,
+            file_size,
+            uploaded_at,
+            uploaded_by
+          ),
+          region:regions(id, name, code)
+        `)
+        .eq('obligation_id', obligation.obligation_id)
+        .eq('status', 'Submitted/Under Review')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      if (error) throw error;
+      setPendingApproval(data?.[0] || null);
     } catch (error) {
       console.error('Error checking pending approval:', error);
     }
@@ -143,11 +196,8 @@ const ObligationDetails = () => {
     setError(null);
     try {
       const { data: obligationData, error: obligationError } = await supabase
-        .from("obligations")
-        .select(`
-          *,
-          policy:policies(*)
-        `)
+        .from("compliance_obligations")
+        .select(`*`)
         .eq("obligation_id", obligationId)
         .single();
 
@@ -166,23 +216,44 @@ const ObligationDetails = () => {
 
       setObligation(obligationData);
 
-      const { data: instancesData, error: instancesError } = await supabase
-        .from("obligation_instances")
-        .select("*")
-        .eq("obligation_id", obligationData.id)
-        .order("due_date", { ascending: true });
+      // Fetch evidence
+      let evidenceQuery = supabase
+        .from('evidence')
+        .select(`
+          *,
+          progress:compliance_progress(
+            id,
+            occurrence_date,
+            status,
+            region:regions(id, name, code)
+          )
+        `)
+        .eq('obligation_id', obligationData.obligation_id)
+        .order('uploaded_at', { ascending: false });
 
-      if (instancesError) {
-        setInstances([]);
-      } else {
-        setInstances(instancesData || []);
+      if (!isAdmin && userRegion) {
+        const regionId = await getRegionId(userRegion);
+        if (regionId) {
+          evidenceQuery = evidenceQuery.eq('region_id', regionId);
+        }
       }
 
-      const { data: evidenceData } = await getEvidence(obligationData.id, userRegion, isAdmin);
-      setEvidence(evidenceData || []);
+      const { data: evidenceData, error: evidenceError } = await evidenceQuery;
+      if (!evidenceError) {
+        setEvidence(evidenceData || []);
+      }
 
-      const { data: activityData } = await getActivityHistory(obligationData.id);
-      setActivities(activityData || []);
+      // Fetch activity history
+      const { data: activityData, error: activityError } = await supabase
+        .from('activity_history')
+        .select('*')
+        .eq('obligation_id', obligationData.obligation_id)
+        .order('created_at', { ascending: false });
+
+      if (!activityError) {
+        setActivities(activityData || []);
+      }
+
     } catch (error) {
       console.error("Error fetching obligation details:", error);
       setError("An unexpected error occurred: " + error.message);
@@ -258,11 +329,11 @@ const ObligationDetails = () => {
         templateFileInputRef.current.value = "";
       }
 
-      toast.success(`Template "${file.name}" uploaded successfully!`);
+      showMessage(`Template "${file.name}" uploaded successfully!`, "success");
     } catch (error) {
       console.error("Error uploading template:", error);
       setTemplateUploadError(error.message || "Failed to upload template");
-      toast.error("Failed to upload template");
+      showMessage("Failed to upload template", "error");
     } finally {
       setTemplateUploading(false);
     }
@@ -283,7 +354,7 @@ const ObligationDetails = () => {
       window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Error downloading template:", error);
-      toast.error("Failed to download template. Please try again.");
+      showMessage("Failed to download template. Please try again.", "error");
     }
   };
 
@@ -298,10 +369,10 @@ const ObligationDetails = () => {
       if (error) throw error;
 
       await fetchTemplates();
-      toast.success(`Template "${template.name}" deleted successfully!`);
+      showMessage(`Template "${template.name}" deleted successfully!`, "success");
     } catch (error) {
       console.error("Error deleting template:", error);
-      toast.error("Failed to delete template. Please try again.");
+      showMessage("Failed to delete template. Please try again.", "error");
     }
   };
 
@@ -312,6 +383,15 @@ const ObligationDetails = () => {
       'Closed': "bg-green-100 text-green-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
+  };
+
+  const getStatusColor = (status) => {
+    const colors = {
+      "Open": "gray",
+      "Submitted/Under Review": "yellow",
+      "Closed": "green",
+    };
+    return colors[status] || "gray";
   };
 
   const getFrequencyBadge = (frequency) => {
@@ -331,94 +411,126 @@ const ObligationDetails = () => {
     if (!obligation) return;
 
     if (!isAdmin && userRegion) {
-      const result = await updateRegionProgress(obligation.id, userRegion, newStatus, comment);
-      if (result.data) {
-        await fetchRegionProgress();
-        await fetchObligationDetails();
-        toast.success(`Status updated to "${newStatus}" for region ${userRegion}`);
-      } else {
-        toast.error("Failed to update status. Please try again.");
+      const regionId = await getRegionId(userRegion);
+      if (!regionId) {
+        showMessage("Region not found for user.", "error");
+        return;
       }
-      setComment("");
+
+      try {
+        // Find the current progress record or create one
+        let progressId = null;
+        const { data: existingProgress, error: findError } = await supabase
+          .from('compliance_progress')
+          .select('id, status, occurrence_date')
+          .eq('obligation_id', obligation.obligation_id)
+          .eq('region_id', regionId)
+          .order('occurrence_date', { ascending: false })
+          .limit(1);
+
+        if (findError) throw findError;
+
+        if (existingProgress && existingProgress.length > 0) {
+          progressId = existingProgress[0].id;
+          
+          const updateData = {
+            status: newStatus,
+            updated_at: new Date().toISOString()
+          };
+
+          if (comment) {
+            updateData.comments = comment;
+          }
+
+          const { error: updateError } = await supabase
+            .from('compliance_progress')
+            .update(updateData)
+            .eq('id', progressId);
+
+          if (updateError) throw updateError;
+        } else {
+          // Create new progress record
+          const currentDate = new Date();
+          const dueDate = obligation.calculated_due_date || 
+            new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
+
+          const { error: insertError } = await supabase
+            .from('compliance_progress')
+            .insert({
+              obligation_id: obligation.obligation_id,
+              region_id: regionId,
+              occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
+              status: newStatus,
+              comments: comment || null,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            });
+
+          if (insertError) throw insertError;
+        }
+
+        await Promise.all([
+          fetchRegionProgress(),
+          fetchObligationDetails(),
+          fetchProgressRecords(),
+          fetchOccurrences()
+        ]);
+
+        showMessage(`Status updated to "${newStatus}" for region ${userRegion}`, "success");
+        setComment("");
+      } catch (error) {
+        console.error("Error updating status:", error);
+        showMessage("Failed to update status. Please try again.", "error");
+      }
       return;
     }
 
-    try {
-      await updateObligationStatus(obligation.id, newStatus, comment);
-
-      if (newStatus === "Closed") {
-        await supabase
-          .from("obligation_instances")
-          .update({
-            status: "Closed",
-            updated_at: new Date().toISOString(),
-          })
-          .eq("obligation_id", obligation.id)
-          .in("status", ["Pending", "In Progress", "Submitted/Under Review"]);
-      }
-
-      fetchObligationDetails();
-      setComment("");
-      toast.success(`Status updated to "${newStatus}"`);
-    } catch (error) {
-      console.error("Error updating status:", error);
-      toast.error("Failed to update status. Please try again.");
-    }
-  };
-
-  const handleInstanceStatusUpdate = async (instanceId, status) => {
+    // Admin status update
     try {
       const { error } = await supabase
-        .from("obligation_instances")
+        .from("compliance_obligations")
         .update({
-          status: status,
-          updated_at: new Date().toISOString(),
-          ...(status === "Submitted/Under Review" && {
-            submitted_by: profile?.id || null,
-            submitted_at: new Date().toISOString(),
-          }),
-          ...(status === "Closed" && {
-            approved_by: profile?.id || null,
-            approved_at: new Date().toISOString(),
-          }),
+          current_status: newStatus,
+          updated_at: new Date().toISOString()
         })
-        .eq("id", instanceId);
+        .eq("id", obligation.id);
 
       if (error) throw error;
 
+      // Update all open progress records
+      if (newStatus === "Closed") {
+        await supabase
+          .from("compliance_progress")
+          .update({
+            status: "Closed",
+            updated_at: new Date().toISOString()
+          })
+          .eq("obligation_id", obligation.obligation_id)
+          .in("status", ["Open", "Submitted/Under Review"]);
+      }
+
+      // Add activity
       await supabase.from("activity_history").insert({
         obligation_id: obligation.id,
-        instance_id: instanceId,
-        action: `Instance status updated to ${status}`,
+        action: `Status updated to ${newStatus}`,
         user_id: profile?.id || null,
         user_name: profile?.full_name || "System",
         details: { comment: comment || "Status updated" },
+        created_at: new Date().toISOString()
       });
-
-      const { data: allInstances } = await supabase
-        .from("obligation_instances")
-        .select("status")
-        .eq("obligation_id", obligation.id);
-
-      const allCompleted = allInstances?.every(
-        (inst) => inst.status === "Closed" || inst.status === "Approved",
-      );
-
-      if (allCompleted && allInstances?.length > 0) {
-        await updateObligationStatus(
-          obligation.id,
-          "Closed",
-          "All instances completed",
-        );
-      }
 
       fetchObligationDetails();
       setComment("");
-      toast.success(`Instance status updated to "${status}"`);
+      showMessage(`Status updated to "${newStatus}"`, "success");
     } catch (error) {
-      console.error("Error updating instance status:", error);
-      toast.error("Failed to update instance status. Please try again.");
+      console.error("Error updating status:", error);
+      showMessage("Failed to update status. Please try again.", "error");
     }
+  };
+
+  const getProgressStatusForRegion = (regionId) => {
+    const record = progressRecords.find(p => p.region_id === regionId);
+    return record?.status || 'Open';
   };
 
   const getAllowedFileTypes = (evidenceType) => {
@@ -547,214 +659,189 @@ const ObligationDetails = () => {
     setSelectedFile(file);
   };
 
-  // FIXED: Handle file upload using the API function with new status flow
-const handleFileUpload = async () => {
-  if (!selectedFile || !obligation) return;
+  const handleFileUpload = async () => {
+    if (!selectedFile || !obligation) return;
 
-  setUploading(true);
-  setUploadError("");
+    setUploading(true);
+    setUploadError("");
 
-  try {
-    console.log('Uploading evidence for obligation:', obligation.obligation_id);
-    console.log('User region name:', userRegion);
-    console.log('Is admin:', isAdmin);
+    try {
+      if (!isAdmin && !userRegion) {
+        throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
+      }
 
-    if (!isAdmin && !userRegion) {
-      throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
-    }
+      const regionId = await getRegionId(userRegion);
+      if (!regionId && !isAdmin) {
+        throw new Error('Region not found for user.');
+      }
 
-    const regionId = await getRegionId(userRegion);
-    if (!regionId && !isAdmin) {
-      throw new Error('Region not found for user.');
-    }
+      const currentDate = new Date();
+      const year = currentDate.getFullYear();
+      const month = currentDate.getMonth();
+      
+      let progressId = null;
+      
+      // Find or create progress record for this obligation in the current month
+      if (!isAdmin && regionId) {
+        const startDate = new Date(year, month, 1).toISOString().split('T')[0];
+        const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
-    const currentDate = new Date();
-    const year = currentDate.getFullYear();
-    const month = currentDate.getMonth();
-    
-    let occurrenceId = null;
-    
-    // Find the occurrence for this obligation in the current month
-    if (!isAdmin && regionId) {
-      const result = await getOccurrencesForMonth(regionId, year, month);
-      if (result.data && result.data.length > 0) {
-        const occurrence = result.data.find(o => o.obligation_id === obligation.id);
-        if (occurrence) {
-          occurrenceId = occurrence.id;
-          console.log('Found occurrence for current month:', occurrenceId);
+        const { data: existingProgress, error: findError } = await supabase
+          .from('compliance_progress')
+          .select('id')
+          .eq('obligation_id', obligation.obligation_id)
+          .eq('region_id', regionId)
+          .gte('occurrence_date', startDate)
+          .lte('occurrence_date', endDate)
+          .limit(1);
+
+        if (findError) throw findError;
+
+        if (existingProgress && existingProgress.length > 0) {
+          progressId = existingProgress[0].id;
         } else {
-          // If no occurrence found, create one
-          console.log('No occurrence found for current month, creating one...');
-          
-          // Get the obligation frequency and due date
-          const dueDate = obligation.calculated_due_date || new Date().toISOString().split('T')[0];
-          const dueDay = new Date(dueDate).getDate();
-          const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
-          const effectiveDay = Math.min(dueDay, lastDayOfMonth);
-          const instanceDate = new Date(year, month, 1).toISOString().split('T')[0];
-          const dueDateForOccurrence = new Date(year, month, effectiveDay).toISOString().split('T')[0];
+          // Create new progress record
+          const dueDate = obligation.calculated_due_date || 
+            new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
-          // Insert occurrence
-          const { data: newOccurrence, error: insertError } = await supabase
-            .from('obligation_occurrences')
+          const { data: newProgress, error: insertError } = await supabase
+            .from('compliance_progress')
             .insert({
-              obligation_id: obligation.id,
+              obligation_id: obligation.obligation_id,
               region_id: regionId,
-              instance_date: instanceDate,
-              due_date: dueDateForOccurrence,
+              occurrence_date: new Date(year, month, 1).toISOString().split('T')[0],
               status: 'Open',
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             })
             .select();
 
-          if (insertError) {
-            console.error('Error creating occurrence:', insertError);
-            throw new Error('Failed to create occurrence for this month.');
+          if (insertError) throw insertError;
+          if (newProgress && newProgress[0]) {
+            progressId = newProgress[0].id;
           }
-
-          if (newOccurrence && newOccurrence[0]) {
-            occurrenceId = newOccurrence[0].id;
-            console.log('Created new occurrence:', occurrenceId);
-          }
-        }
-      } else {
-        // No occurrences found for this month, create one
-        console.log('No occurrences found for month, creating one...');
-        const dueDate = obligation.calculated_due_date || new Date().toISOString().split('T')[0];
-        const dueDay = new Date(dueDate).getDate();
-        const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
-        const effectiveDay = Math.min(dueDay, lastDayOfMonth);
-        const instanceDate = new Date(year, month, 1).toISOString().split('T')[0];
-        const dueDateForOccurrence = new Date(year, month, effectiveDay).toISOString().split('T')[0];
-
-        const { data: newOccurrence, error: insertError } = await supabase
-          .from('obligation_occurrences')
-          .insert({
-            obligation_id: obligation.id,
-            region_id: regionId,
-            instance_date: instanceDate,
-            due_date: dueDateForOccurrence,
-            status: 'Open',
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .select();
-
-        if (insertError) {
-          console.error('Error creating occurrence:', insertError);
-          throw new Error('Failed to create occurrence for this month.');
-        }
-
-        if (newOccurrence && newOccurrence[0]) {
-          occurrenceId = newOccurrence[0].id;
-          console.log('Created new occurrence:', occurrenceId);
         }
       }
-    }
 
-    if (!occurrenceId) {
-      throw new Error('Could not find or create an occurrence for this month.');
-    }
+      if (!progressId) {
+        throw new Error('Could not find or create a progress record for this month.');
+      }
 
-    // Upload the file
-    const fileName = `${Date.now()}_${selectedFile.name}`;
-    const filePath = `evidence/${obligation.id}/${occurrenceId}/${fileName}`;
+      // Upload the file
+      const fileName = `${Date.now()}_${selectedFile.name}`;
+      const filePath = `evidence/${obligation.id}/${progressId}/${fileName}`;
 
-    // Upload to storage
-    const { error: uploadError } = await supabase.storage
-      .from('obligation_evidence')
-      .upload(filePath, selectedFile);
+      const { error: uploadError } = await supabase.storage
+        .from('obligation_evidence')
+        .upload(filePath, selectedFile);
 
-    if (uploadError) throw uploadError;
+      if (uploadError) throw uploadError;
 
-    // Get public URL
-    const { data: urlData } = supabase.storage
-      .from('obligation_evidence')
-      .getPublicUrl(filePath);
+      const { data: urlData } = supabase.storage
+        .from('obligation_evidence')
+        .getPublicUrl(filePath);
 
-    // Save evidence record
-    const { data: evidenceData, error: evidenceError } = await supabase
-      .from('evidence')
-      .insert({
-        obligation_id: obligation.id,
-        occurrence_id: occurrenceId,
-        region_id: regionId,
-        file_name: selectedFile.name,
-        file_url: urlData.publicUrl,
-        file_type: selectedFile.type,
-        file_size: selectedFile.size,
-        uploaded_by: profile?.id || null,
-        status: 'Pending'
-      })
-      .select();
-
-    if (evidenceError) throw evidenceError;
-
-    // CRITICAL: Update occurrence status to "Submitted/Under Review"
-    if (evidenceData && evidenceData[0]) {
-      const updateResult = await supabase
-        .from('obligation_occurrences')
-        .update({
-          status: 'Submitted/Under Review',
-          evidence_id: evidenceData[0].id,
-          updated_at: new Date().toISOString(),
-          started_at: new Date().toISOString()
+      // Save evidence record
+      const { data: evidenceData, error: evidenceError } = await supabase
+        .from('evidence')
+        .insert({
+          obligation_id: obligation.obligation_id,
+          occurrence_id: progressId,
+          region_id: regionId,
+          file_name: selectedFile.name,
+          file_url: urlData.publicUrl,
+          file_type: selectedFile.type,
+          file_size: selectedFile.size,
+          uploaded_by: profile?.id || null,
+          status: 'Pending'
         })
-        .eq('id', occurrenceId)
         .select();
 
-      if (updateResult.error) {
-        console.error('Error updating occurrence status:', updateResult.error);
-        throw updateResult.error;
+      if (evidenceError) throw evidenceError;
+
+      // Update progress status to "Submitted/Under Review"
+      if (evidenceData && evidenceData[0]) {
+        const updateResult = await supabase
+          .from('compliance_progress')
+          .update({
+            status: 'Submitted/Under Review',
+            evidence_id: evidenceData[0].id,
+            uploaded_by: profile?.id || null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', progressId)
+          .select();
+
+        if (updateResult.error) {
+          console.error('Error updating progress status:', updateResult.error);
+          throw updateResult.error;
+        }
+
+        showMessage('Evidence submitted for review. Status updated to "Submitted/Under Review"', "success");
       }
 
-      console.log('Occurrence status updated to Submitted/Under Review:', updateResult.data);
-      toast.success('Evidence submitted for review. Status updated to "Submitted/Under Review"');
+      // Refresh data
+      await Promise.all([
+        fetchObligationDetails(),
+        fetchRegionProgress(),
+        fetchOccurrences(),
+        checkPendingApproval(),
+        fetchProgressRecords()
+      ]);
+      
+      showMessage(`Evidence uploaded successfully${!isAdmin && userRegion ? ` for region ${userRegion}` : ''}!`, "success");
+      setSelectedFile(null);
+      
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    } catch (error) {
+      console.error("Error uploading evidence:", error);
+      setUploadError(
+        error.message || "Failed to upload evidence. Please try again.",
+      );
+      showMessage("Failed to upload evidence: " + error.message, "error");
+    } finally {
+      setUploading(false);
     }
-
-    // Update region progress for backward compatibility
-    if (!isAdmin && userRegion && regionId) {
-      await updateRegionProgress(obligation.id, userRegion, 'In Progress', 'Evidence submitted for review');
-    }
-
-    // Refresh data
-    await fetchObligationDetails();
-    await fetchRegionProgress();
-    await fetchOccurrences();
-    await checkPendingApproval();
-    
-    toast.success(`Evidence uploaded successfully${!isAdmin && userRegion ? ` for region ${userRegion}` : ''}!`);
-    setSelectedFile(null);
-    
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  } catch (error) {
-    console.error("Error uploading evidence:", error);
-    setUploadError(
-      error.message || "Failed to upload evidence. Please try again.",
-    );
-    toast.error("Failed to upload evidence: " + error.message);
-  } finally {
-    setUploading(false);
-  }
-};
+  };
 
   const handleApprove = async () => {
     if (!pendingApproval) return;
 
     try {
-      const result = await approveOccurrence(pendingApproval.id, comment);
-      if (result.error) throw result.error;
-      
-      toast.success('Occurrence approved and closed successfully!');
+      const { error } = await supabase
+        .from('compliance_progress')
+        .update({
+          status: 'Closed',
+          updated_by: profile?.id || null,
+          comments: comment || 'Approved by admin',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', pendingApproval.id);
+
+      if (error) throw error;
+
+      await supabase.from("activity_history").insert({
+        obligation_id: obligation.id,
+        progress_id: pendingApproval.id,
+        action: 'Approved and closed',
+        user_id: profile?.id || null,
+        user_name: profile?.full_name || "System",
+        details: { comment: comment || "Approved by admin" },
+        created_at: new Date().toISOString()
+      });
+
+      showMessage('Occurrence approved and closed successfully!', "success");
       setComment('');
-      await fetchObligationDetails();
-      await checkPendingApproval();
+      await Promise.all([
+        fetchObligationDetails(),
+        checkPendingApproval(),
+        fetchProgressRecords()
+      ]);
     } catch (error) {
       console.error('Error approving:', error);
-      toast.error('Failed to approve. Please try again.');
+      showMessage('Failed to approve. Please try again.', "error");
     }
   };
 
@@ -762,16 +849,38 @@ const handleFileUpload = async () => {
     if (!pendingApproval) return;
 
     try {
-      const result = await rejectOccurrence(pendingApproval.id, comment);
-      if (result.error) throw result.error;
-      
-      toast.success('Occurrence rejected successfully!');
+      const { error } = await supabase
+        .from('compliance_progress')
+        .update({
+          status: 'Open',
+          updated_by: profile?.id || null,
+          comments: comment || 'Rejected, please resubmit',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', pendingApproval.id);
+
+      if (error) throw error;
+
+      await supabase.from("activity_history").insert({
+        obligation_id: obligation.id,
+        progress_id: pendingApproval.id,
+        action: 'Rejected',
+        user_id: profile?.id || null,
+        user_name: profile?.full_name || "System",
+        details: { comment: comment || "Rejected by admin" },
+        created_at: new Date().toISOString()
+      });
+
+      showMessage('Occurrence rejected successfully!', "success");
       setComment('');
-      await fetchObligationDetails();
-      await checkPendingApproval();
+      await Promise.all([
+        fetchObligationDetails(),
+        checkPendingApproval(),
+        fetchProgressRecords()
+      ]);
     } catch (error) {
       console.error('Error rejecting:', error);
-      toast.error('Failed to reject. Please try again.');
+      showMessage('Failed to reject. Please try again.', "error");
     }
   };
 
@@ -779,13 +888,21 @@ const handleFileUpload = async () => {
     if (!comment.trim() || !obligation) return;
 
     try {
-      await addComment(obligation.id, comment);
+      await supabase.from("activity_history").insert({
+        obligation_id: obligation.id,
+        action: 'Comment added',
+        user_id: profile?.id || null,
+        user_name: profile?.full_name || "System",
+        details: { comment: comment },
+        created_at: new Date().toISOString()
+      });
+
       fetchObligationDetails();
       setComment("");
-      toast.success("Comment added successfully");
+      showMessage("Comment added successfully", "success");
     } catch (error) {
       console.error("Error adding comment:", error);
-      toast.error("Failed to add comment. Please try again.");
+      showMessage("Failed to add comment. Please try again.", "error");
     }
   };
 
@@ -869,13 +986,49 @@ const handleFileUpload = async () => {
     : { accept: "*", label: "All file types" };
 
   return (
-    <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0">
+    <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0 relative">
+      {/* Center Message */}
+      {message.visible && (
+        <div className="fixed inset-0 flex items-center justify-center z-[9999] pointer-events-none">
+          <div className={`px-6 py-4 rounded-lg shadow-2xl max-w-md w-full text-center pointer-events-auto ${
+            message.type === 'success' ? 'bg-green-500' :
+            message.type === 'error' ? 'bg-red-500' :
+            message.type === 'warning' ? 'bg-yellow-500' :
+            'bg-blue-500'
+          } text-white`}>
+            <div className="flex items-center justify-center">
+              {message.type === 'success' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                </svg>
+              )}
+              {message.type === 'error' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              )}
+              {message.type === 'warning' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              )}
+              {message.type === 'info' && (
+                <svg className="h-6 w-6 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+              <span className="font-medium">{message.text}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 sm:gap-0">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold text-gray-900 break-all">
             {obligation.obligation_id}
           </h1>
-          <p className="text-sm text-gray-600 break-words">{obligation.name}</p>
+          <p className="text-sm text-gray-600 break-words">{obligation.obligation_name}</p>
           {!isAdmin && userRegion && (
             <span className="inline-flex items-center mt-1">
               <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
@@ -922,7 +1075,7 @@ const handleFileUpload = async () => {
               <div>
                 <dt className="text-xs sm:text-sm font-medium text-gray-500">Policy</dt>
                 <dd className="mt-1 text-xs sm:text-sm text-gray-900 break-words">
-                  {obligation.policy?.name || "N/A"}
+                  {obligation.policy || "N/A"}
                 </dd>
               </div>
               <div>
@@ -1052,68 +1205,7 @@ const handleFileUpload = async () => {
             </dl>
           </div>
 
-          {instances.length > 0 && (
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-                Obligation Instances
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Period
-                      </th>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Due Date
-                      </th>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {instances.map((instance) => (
-                      <tr key={instance.id}>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                          {instance.period || "N/A"}
-                        </td>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                          {formatDate(instance.due_date)}
-                        </td>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap">
-                          <span
-                            className={`px-2 py-1 text-[10px] sm:text-xs font-medium rounded-full ${getStatusBadge(instance.status)}`}
-                          >
-                            {instance.status}
-                          </span>
-                        </td>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap text-xs sm:text-sm">
-                          <select
-                            onChange={(e) =>
-                              handleInstanceStatusUpdate(
-                                instance.id,
-                                e.target.value,
-                              )
-                            }
-                            value={instance.status}
-                            className="text-xs sm:text-sm border border-gray-300 rounded-md px-2 py-1 focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
-                          >
-                            <option value="Open">Open</option>
-                            <option value="Submitted/Under Review">Submitted/Under Review</option>
-                            <option value="Closed">Closed</option>
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          
 
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
@@ -1141,8 +1233,7 @@ const handleFileUpload = async () => {
             {!isAdmin && userRegion && regionProgress && (
               <p className="text-xs text-gray-500 mt-2">
                 Current region status: <span className="font-medium">{regionProgress.status}</span>
-                {regionProgress.completed_at && ` • Completed: ${formatDate(regionProgress.completed_at)}`}
-                {regionProgress.started_at && ` • Started: ${formatDate(regionProgress.started_at)}`}
+                {regionProgress.occurrence_date && ` • Occurrence: ${formatDate(regionProgress.occurrence_date)}`}
               </p>
             )}
           </div>
@@ -1156,6 +1247,9 @@ const handleFileUpload = async () => {
               <div className="bg-yellow-50 p-3 sm:p-4 rounded-lg border border-yellow-200 mb-4">
                 <p className="text-sm text-yellow-800">
                   This obligation has been submitted for review and is waiting for your approval.
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Region: <span className="font-medium">{pendingApproval.region?.name || "N/A"}</span>
                 </p>
                 {pendingApproval.comments && (
                   <p className="text-xs text-gray-600 mt-1">
@@ -1247,49 +1341,7 @@ const handleFileUpload = async () => {
             </div>
           </div>
 
-          {occurrences.length > 0 && (
-            <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-                Current Month Occurrences
-              </h3>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Instance Date
-                      </th>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Due Date
-                      </th>
-                      <th className="px-3 sm:px-6 py-2 sm:py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                        Status
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {occurrences.map((occurrence) => (
-                      <tr key={occurrence.id}>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                          {formatDate(occurrence.instance_date)}
-                        </td>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap text-xs sm:text-sm text-gray-900">
-                          {formatDate(occurrence.due_date)}
-                        </td>
-                        <td className="px-3 sm:px-6 py-2 sm:py-4 whitespace-nowrap">
-                          <span
-                            className={`px-2 py-1 text-[10px] sm:text-xs font-medium rounded-full ${getStatusBadge(occurrence.status)}`}
-                          >
-                            {occurrence.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+          
         </div>
 
         <div className="space-y-4 sm:space-y-6">
@@ -1401,7 +1453,7 @@ const handleFileUpload = async () => {
                       )}
                       {item.occurrence_id && (
                         <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-800">
-                          Occurrence
+                          Progress
                         </span>
                       )}
                     </div>
@@ -1589,15 +1641,6 @@ const handleFileUpload = async () => {
       </div>
     </div>
   );
-};
-
-const getStatusColor = (status) => {
-  const colors = {
-    "Open": "gray",
-    "Submitted/Under Review": "yellow",
-    "Closed": "green",
-  };
-  return colors[status] || "gray";
 };
 
 export default ObligationDetails;

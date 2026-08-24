@@ -9,14 +9,13 @@ import {
 import { supabase } from "../../api/supabase";
 import { useAuth } from "../../context/AuthContext";
 import JSZip from "jszip";
+import { toast } from 'react-toastify';
 
 const Reports = () => {
-  // Removed useNavigate since it's not needed
   const { profile } = useAuth();
   const isAdmin = profile?.role === "admin";
   const userRegion = profile?.region_name || null;
 
-  const [reportType, setReportType] = useState("compliance-summary");
   const [loading, setLoading] = useState(true);
   const [reportData, setReportData] = useState(null);
   const [obligations, setObligations] = useState([]);
@@ -30,7 +29,7 @@ const Reports = () => {
   const [selectedDomain, setSelectedDomain] = useState("");
   const [selectedPolicy, setSelectedPolicy] = useState("");
   const [selectedClause, setSelectedClause] = useState("");
-  const [selectedSubRegion, setSelectedSubRegion] = useState("");
+  const [selectedRegion, setSelectedRegion] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
   
@@ -40,8 +39,8 @@ const Reports = () => {
   const [allPolicies, setAllPolicies] = useState([]);
   const [clauses, setClauses] = useState([]);
   const [allClauses, setAllClauses] = useState([]);
-  const [subRegions, setSubRegions] = useState([]);
-  const [allSubRegions, setAllSubRegions] = useState([]);
+  const [regionOptions, setRegionOptions] = useState([]);
+  const [allRegionOptions, setAllRegionOptions] = useState([]);
   const [months] = useState([
     { value: "01", label: "January" },
     { value: "02", label: "February" },
@@ -58,34 +57,76 @@ const Reports = () => {
   ]);
   const [years, setYears] = useState([]);
 
+  // Get region ID from region name
+  const getRegionId = async (regionName) => {
+    if (!regionName) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', regionName)
+        .single();
+      
+      if (error) return null;
+      return data?.id || null;
+    } catch (error) {
+      console.error('Error getting region ID:', error);
+      return null;
+    }
+  };
+
+  // Get region name from region ID
+  const getRegionNameById = async (regionId) => {
+    if (!regionId) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('name')
+        .eq('id', regionId)
+        .single();
+      
+      if (error) return null;
+      return data?.name || null;
+    } catch (error) {
+      console.error('Error getting region name:', error);
+      return null;
+    }
+  };
+
   useEffect(() => {
     fetchFilterOptions();
     fetchReportData();
   }, []);
 
   useEffect(() => {
-    if (selectedDomain || selectedPolicy || selectedClause || selectedSubRegion || selectedMonth || selectedYear) {
+    if (selectedDomain || selectedPolicy || selectedClause || selectedRegion || selectedMonth || selectedYear) {
       fetchReportData();
     }
-  }, [selectedDomain, selectedPolicy, selectedClause, selectedSubRegion, selectedMonth, selectedYear]);
+  }, [selectedDomain, selectedPolicy, selectedClause, selectedRegion, selectedMonth, selectedYear]);
 
-  // Cascading filter effect - Update policies, clauses, subRegions based on selectedDomain
+  // Cascading filter effect - Update policies, clauses based on selectedDomain
   useEffect(() => {
     if (selectedDomain) {
       updateFiltersBasedOnDomain(selectedDomain);
     } else {
       setPolicies(allPolicies);
       setClauses(allClauses);
-      setSubRegions(allSubRegions);
     }
   }, [selectedDomain]);
 
   const fetchFilterOptions = async () => {
     try {
-      // Fetch all obligations to get unique values
-      const { data: obligationsData } = await supabase
-        .from('obligations')
-        .select('domain, clause, policy_id, region');
+      // Fetch all obligations to get unique values from compliance_obligations
+      const { data: obligationsData, error: obligationsError } = await supabase
+        .from('compliance_obligations')
+        .select('domain, clause, policy, obligation_type')
+        .order('domain');
+
+      if (obligationsError) {
+        console.error('Error fetching obligations for filters:', obligationsError);
+        toast.error('Failed to load filter options');
+        return;
+      }
 
       if (obligationsData) {
         const uniqueDomains = [...new Set(obligationsData.map(o => o.domain).filter(Boolean))];
@@ -94,20 +135,36 @@ const Reports = () => {
         const uniqueClauses = [...new Set(obligationsData.map(o => o.clause).filter(Boolean))];
         setAllClauses(uniqueClauses);
         setClauses(uniqueClauses);
-
-        const uniqueSubRegions = [...new Set(obligationsData.map(o => o.region).filter(Boolean))];
-        setAllSubRegions(uniqueSubRegions);
-        setSubRegions(uniqueSubRegions);
-
-        const { data: policiesData } = await supabase
-          .from('policies')
-          .select('id, name');
-        if (policiesData) {
-          setAllPolicies(policiesData);
-          setPolicies(policiesData);
-        }
       }
 
+      // Fetch policies
+      const { data: policiesData, error: policiesError } = await supabase
+        .from('policies')
+        .select('id, name')
+        .order('name');
+      
+      if (policiesError) {
+        console.error('Error fetching policies:', policiesError);
+      } else if (policiesData) {
+        setAllPolicies(policiesData);
+        setPolicies(policiesData);
+      }
+
+      // Fetch regions from regions table
+      const { data: regionsData, error: regionsError } = await supabase
+        .from('regions')
+        .select('id, name')
+        .order('name');
+      
+      if (regionsError) {
+        console.error('Error fetching regions:', regionsError);
+      } else if (regionsData) {
+        const regionNames = regionsData.map(r => r.name);
+        setAllRegionOptions(regionNames);
+        setRegionOptions(regionNames);
+      }
+
+      // Generate years
       const currentYear = new Date().getFullYear();
       const yearOptions = [];
       for (let i = currentYear - 4; i <= currentYear; i++) {
@@ -115,39 +172,38 @@ const Reports = () => {
       }
       setYears(yearOptions);
 
+      toast.success('Filters loaded successfully');
+
     } catch (error) {
       console.error('Error fetching filter options:', error);
+      toast.error('Failed to load filter options');
     }
   };
 
   const updateFiltersBasedOnDomain = async (domain) => {
     try {
       const { data: domainObligations, error } = await supabase
-        .from('obligations')
-        .select('clause, policy_id, region')
+        .from('compliance_obligations')
+        .select('clause, policy')
         .eq('domain', domain);
 
       if (error) throw error;
 
       if (domainObligations) {
-        const policyIds = [...new Set(domainObligations.map(o => o.policy_id).filter(Boolean))];
-        const filteredPolicies = allPolicies.filter(p => policyIds.includes(p.id));
+        // Filter policies by those used in this domain
+        const policyNames = [...new Set(domainObligations.map(o => o.policy).filter(Boolean))];
+        const filteredPolicies = allPolicies.filter(p => policyNames.includes(p.name));
         setPolicies(filteredPolicies);
 
         const uniqueClauses = [...new Set(domainObligations.map(o => o.clause).filter(Boolean))];
         setClauses(uniqueClauses);
 
-        const uniqueSubRegions = [...new Set(domainObligations.map(o => o.region).filter(Boolean))];
-        setSubRegions(uniqueSubRegions);
-
+        // Clear selections that are no longer valid
         if (selectedPolicy && !filteredPolicies.some(p => p.id === selectedPolicy)) {
           setSelectedPolicy("");
         }
         if (selectedClause && !uniqueClauses.includes(selectedClause)) {
           setSelectedClause("");
-        }
-        if (selectedSubRegion && !uniqueSubRegions.includes(selectedSubRegion)) {
-          setSelectedSubRegion("");
         }
       }
     } catch (error) {
@@ -158,455 +214,198 @@ const Reports = () => {
   const fetchReportData = async () => {
     setLoading(true);
     try {
-      // Build filters
+      // Build filters for getObligations
       const filters = {};
       if (selectedDomain) filters.domain = selectedDomain;
-      if (selectedPolicy) filters.policy_id = selectedPolicy;
+      if (selectedPolicy) filters.policy = selectedPolicy;
       if (selectedClause) filters.clause = selectedClause;
-      if (selectedSubRegion) filters.region = selectedSubRegion;
-      
-      // Month and Year filters
-      let dateFilter = {};
-      if (selectedMonth && selectedYear) {
-        const startDate = new Date(parseInt(selectedYear), parseInt(selectedMonth) - 1, 1);
-        const endDate = new Date(parseInt(selectedYear), parseInt(selectedMonth), 0);
-        dateFilter = {
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-        };
-      } else if (selectedYear) {
-        const startDate = new Date(parseInt(selectedYear), 0, 1);
-        const endDate = new Date(parseInt(selectedYear), 11, 31);
-        dateFilter = {
-          startDate: startDate.toISOString(),
-          endDate: endDate.toISOString(),
-        };
-      }
+      if (selectedMonth) filters.month = selectedMonth;
+      if (selectedYear) filters.year = selectedYear;
 
-      // First, get obligations that match ALL filters
-      let obligationQuery = supabase.from("obligations").select("id, domain, region, policy_id, clause");
-      
-      if (filters.domain) {
-        obligationQuery = obligationQuery.eq('domain', filters.domain);
-      }
-      if (filters.region) {
-        obligationQuery = obligationQuery.eq('region', filters.region);
-      }
-      if (filters.policy_id) {
-        obligationQuery = obligationQuery.eq('policy_id', filters.policy_id);
-      }
-      if (filters.clause) {
-        obligationQuery = obligationQuery.eq('clause', filters.clause);
-      }
-      
-      const { data: filteredObligations, error: obligationError } = await obligationQuery;
-      
-      if (obligationError) {
-        console.error("Error fetching filtered obligations:", obligationError);
-      }
-      
-      const obligationIds = filteredObligations?.map(o => o.id) || [];
-      
-      // Fetch evidence only for the filtered obligations AND region
-      let evidenceQuery = supabase
-        .from("evidence")
-        .select(`
-          *,
-          obligation:obligations(
-            obligation_id,
-            name,
-            domain,
-            current_status,
-            evidence_type,
-            responsible,
-            accountable,
-            region,
-            policy_id,
-            clause,
-            created_at
-          )
-        `)
-        .order("uploaded_at", { ascending: false });
-      
-      // Apply region filter for non-admin users
-      if (!isAdmin && userRegion) {
-        // Get region ID for the user's region
-        const { data: regionData } = await supabase
-          .from('regions')
-          .select('id')
-          .eq('name', userRegion)
-          .single();
-        
-        if (regionData) {
-          evidenceQuery = evidenceQuery.eq('region_id', regionData.id);
-        }
-      }
-      
-      // Apply obligation ID filter if we have filtered obligations
-      if (obligationIds.length > 0) {
-        evidenceQuery = evidenceQuery.in('obligation_id', obligationIds);
-      } else if (filters.domain || filters.region || filters.policy_id || filters.clause) {
-        setAllEvidence([]);
-        const filteredData = await fetchFilteredData(filters, dateFilter);
-        const regionsData = await getRegions();
-        generateReport(
-          reportType,
-          filteredData,
-          stats,
-          domainData,
-          regionsData?.data || [],
-          [],
-        );
-        setLoading(false);
-        return;
-      }
-      
-      // Apply date filters on evidence uploaded_at
-      if (dateFilter.startDate && dateFilter.endDate) {
-        evidenceQuery = evidenceQuery
-          .gte("uploaded_at", dateFilter.startDate)
-          .lte("uploaded_at", dateFilter.endDate);
-      }
+      console.log('📊 Fetching report data with filters:', filters);
 
-      const { data: evidenceData, error: evidenceError } = await evidenceQuery;
+      // Fetch obligations with filters
+      const obligationsResult = await getObligations(filters, userRegion, isAdmin);
       
-      if (evidenceError) {
-        console.error("Error fetching evidence:", evidenceError);
-      }
-
-      // Fetch all required data with filters and region
-      const [
-        obligationsData,
-        statsData,
-        domainData,
-        regionsData,
-      ] = await Promise.all([
-        getObligations(filters, userRegion, isAdmin),
+      // Fetch all required data
+      const [statsData, domainData, regionsData] = await Promise.all([
         getDashboardStats(userRegion, isAdmin),
         getComplianceByDomain(userRegion, isAdmin),
         getRegions(),
       ]);
 
-      setObligations(obligationsData.data || []);
       setStats(statsData);
       setDomainData(domainData);
       setRegions(regionsData.data || []);
-      setAllEvidence(evidenceData || []);
 
-      const filteredData = await fetchFilteredData(filters, dateFilter);
+      // Process obligations data
+      let obligationsList = obligationsResult.data || [];
+      setObligations(obligationsList);
 
+      // ---------------------------------------------------------
+      // Fetch evidence properly with all filters
+      // ---------------------------------------------------------
+      let evidenceData = [];
+      
+      if (obligationsList.length > 0) {
+        // Get all progress records for these obligations
+        const obligationIds = obligationsList.map(o => o.obligation_id);
+        
+        // First, get progress records that have evidence
+        let progressQuery = supabase
+          .from('compliance_progress')
+          .select('id, obligation_id, evidence_id, region_id, status, occurrence_date, calculated_due_date')
+          .in('obligation_id', obligationIds)
+          .not('evidence_id', 'is', null);
+
+        // Apply region filter for non-admin users
+        if (!isAdmin && userRegion) {
+          const regionId = await getRegionId(userRegion);
+          if (regionId) {
+            progressQuery = progressQuery.eq('region_id', regionId);
+          }
+        }
+
+        // Apply region filter if selected
+        if (selectedRegion) {
+          const regionId = await getRegionId(selectedRegion);
+          if (regionId) {
+            progressQuery = progressQuery.eq('region_id', regionId);
+          }
+        }
+
+        const { data: progressData, error: progressError } = await progressQuery;
+
+        if (progressError) {
+          console.error('Error fetching progress for evidence:', progressError);
+        }
+
+        if (progressData && progressData.length > 0) {
+          // Get all evidence IDs from progress
+          const evidenceIds = progressData
+            .map(p => p.evidence_id)
+            .filter(id => id !== null);
+
+          if (evidenceIds.length > 0) {
+            // Fetch the actual evidence files
+            let evidenceQuery = supabase
+              .from('evidence')
+              .select('*')
+              .in('id', evidenceIds)
+              .order('uploaded_at', { ascending: false });
+
+            // Apply region filter
+            if (selectedRegion) {
+              const regionId = await getRegionId(selectedRegion);
+              if (regionId) {
+                evidenceQuery = evidenceQuery.eq('region_id', regionId);
+              }
+            } else if (!isAdmin && userRegion) {
+              const regionId = await getRegionId(userRegion);
+              if (regionId) {
+                evidenceQuery = evidenceQuery.eq('region_id', regionId);
+              }
+            }
+
+            // Apply date filters on evidence uploaded_at
+            if (selectedMonth && selectedYear) {
+              const year = parseInt(selectedYear);
+              const month = parseInt(selectedMonth);
+              const startDate = new Date(year, month - 1, 1);
+              const endDate = new Date(year, month, 0);
+              evidenceQuery = evidenceQuery
+                .gte("uploaded_at", startDate.toISOString())
+                .lte("uploaded_at", endDate.toISOString());
+            } else if (selectedYear) {
+              const year = parseInt(selectedYear);
+              const startDate = new Date(year, 0, 1);
+              const endDate = new Date(year, 11, 31);
+              evidenceQuery = evidenceQuery
+                .gte("uploaded_at", startDate.toISOString())
+                .lte("uploaded_at", endDate.toISOString());
+            }
+
+            const { data: evidenceResult, error: evidenceError } = await evidenceQuery;
+
+            if (evidenceError) {
+              console.error('Error fetching evidence:', evidenceError);
+            } else {
+              evidenceData = evidenceResult || [];
+            }
+          }
+        }
+      }
+
+      console.log(`📊 Found ${evidenceData.length} evidence files`);
+      setAllEvidence(evidenceData);
+
+      // Generate the report
       generateReport(
-        reportType,
-        filteredData,
+        obligationsList,
         statsData,
         domainData,
-        regionsData.data,
-        evidenceData || [],
+        regionsData.data || [],
+        evidenceData,
       );
     } catch (error) {
       console.error("Error fetching report data:", error);
+      toast.error('Failed to fetch report data');
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchFilteredData = async (filters, dateFilter) => {
-    try {
-      let query = supabase.from("obligations").select(`
-          *,
-          policy:policies(*)
-        `);
-
-      if (filters.domain) {
-        query = query.eq('domain', filters.domain);
-      }
-      if (filters.policy_id) {
-        query = query.eq('policy_id', filters.policy_id);
-      }
-      if (filters.clause) {
-        query = query.eq('clause', filters.clause);
-      }
-      if (filters.region) {
-        query = query.eq('region', filters.region);
-      }
-
-      if (dateFilter.startDate && dateFilter.endDate) {
-        query = query
-          .gte("created_at", dateFilter.startDate)
-          .lte("created_at", dateFilter.endDate);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data || [];
-    } catch (error) {
-      console.error("Error fetching filtered data:", error);
-      return [];
-    }
-  };
-
   const generateReport = (
-    type,
-    filteredData,
+    obligationsData,
     stats,
     domains,
     regions,
     evidence,
   ) => {
-    let data = {};
-
-    switch (type) {
-      case "compliance-summary":
-        data = generateComplianceSummary(
-          filteredData || obligations,
-          stats,
-          domains,
-        );
-        break;
-      case "pending-obligations":
-        data = generatePendingObligations(filteredData || obligations);
-        break;
-      case "overdue-obligations":
-        data = generateOverdueObligations(filteredData || obligations);
-        break;
-      case "audit-readiness":
-        data = generateAuditReadiness(filteredData || obligations, stats);
-        break;
-      case "regional-compliance":
-        data = generateRegionalCompliance(filteredData || obligations, regions);
-        break;
-      case "evidence-report":
-        data = generateEvidenceReport(
-          filteredData || obligations,
-          evidence || allEvidence,
-        );
-        break;
-      default:
-        data = generateComplianceSummary(
-          filteredData || obligations,
-          stats,
-          domains,
-        );
-    }
-
+    const data = generateComplianceSummary(obligationsData || obligations, stats, domains);
     setReportData(data);
   };
 
   // Report Generation Functions
   const generateComplianceSummary = (obligations, stats, domains) => {
+    const getStatus = (item) => item.current_status || 'Open';
+    
+    const totalObligations = obligations.length;
+    const closed = obligations.filter((o) => getStatus(o) === "Closed").length;
+    const submitted = obligations.filter((o) => getStatus(o) === "Submitted/Under Review").length;
+    const open = obligations.filter((o) => getStatus(o) === "Open").length;
+    const overdue = obligations.filter((o) => {
+      const dueDate = o.calculated_due_date;
+      if (!dueDate) return false;
+      return new Date(dueDate) < new Date() && getStatus(o) !== "Closed";
+    }).length;
+
     return {
       title: "Compliance Summary Report",
       stats: stats,
       domains: domains,
-      totalObligations: obligations.length,
-      completed: obligations.filter((o) => o.current_status === "Completed")
-        .length,
-      pending: obligations.filter((o) => o.current_status === "Pending").length,
-      inProgress: obligations.filter((o) => o.current_status === "In Progress")
-        .length,
-      overdue: obligations.filter((o) => o.current_status === "Overdue").length,
-      notStarted: obligations.filter((o) => o.current_status === "Not Started")
-        .length,
+      totalObligations: totalObligations,
+      closed: closed,
+      submitted: submitted,
+      open: open,
+      overdue: overdue,
       recentObligations: obligations.slice(0, 10),
       filters: {
         domain: selectedDomain,
         policy: selectedPolicy,
         clause: selectedClause,
-        subRegion: selectedSubRegion,
+        region: selectedRegion || (!isAdmin ? userRegion : "All Regions"),
         month: selectedMonth,
         year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
+        userRegion: !isAdmin ? userRegion : "All Regions",
       },
     };
   };
 
-  const generatePendingObligations = (obligations) => {
-    const pending = obligations.filter((o) => o.current_status === "Pending");
-    return {
-      title: "Pending Obligations Report",
-      totalPending: pending.length,
-      pendingObligations: pending,
-      byDomain: pending.reduce((acc, o) => {
-        acc[o.domain] = (acc[o.domain] || 0) + 1;
-        return acc;
-      }, {}),
-      filters: {
-        domain: selectedDomain,
-        policy: selectedPolicy,
-        clause: selectedClause,
-        subRegion: selectedSubRegion,
-        month: selectedMonth,
-        year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
-      },
-    };
-  };
-
-  const generateOverdueObligations = (obligations) => {
-    const overdue = obligations.filter((o) => o.current_status === "Overdue");
-    return {
-      title: "Overdue Obligations Report",
-      totalOverdue: overdue.length,
-      overdueObligations: overdue,
-      byDomain: overdue.reduce((acc, o) => {
-        acc[o.domain] = (acc[o.domain] || 0) + 1;
-        return acc;
-      }, {}),
-      filters: {
-        domain: selectedDomain,
-        policy: selectedPolicy,
-        clause: selectedClause,
-        subRegion: selectedSubRegion,
-        month: selectedMonth,
-        year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
-      },
-    };
-  };
-
-  const generateAuditReadiness = (obligations, stats) => {
-    const completed = obligations.filter(
-      (o) => o.current_status === "Completed",
-    );
-    const readinessScore = stats.auditReadiness || 0;
-
-    return {
-      title: "Audit Readiness Report",
-      readinessScore: readinessScore,
-      totalObligations: obligations.length,
-      completedObligations: completed.length,
-      completionRate:
-        obligations.length > 0
-          ? Math.round((completed.length / obligations.length) * 100)
-          : 0,
-      readinessLevel:
-        readinessScore >= 80
-          ? "High"
-          : readinessScore >= 60
-            ? "Moderate"
-            : "Low",
-      recommendations:
-        readinessScore < 80
-          ? [
-              "Complete pending obligations",
-              "Review overdue items",
-              "Ensure evidence is uploaded for all completed obligations",
-            ]
-          : [
-              "Maintain current compliance levels",
-              "Continue regular monitoring",
-            ],
-      filters: {
-        domain: selectedDomain,
-        policy: selectedPolicy,
-        clause: selectedClause,
-        subRegion: selectedSubRegion,
-        month: selectedMonth,
-        year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
-      },
-    };
-  };
-
-  const generateRegionalCompliance = (obligations, regions) => {
-    const regionalData = regions.map((region) => {
-      const regionObligations = obligations.filter(
-        (o) => o.region === region.name,
-      );
-      const completed = regionObligations.filter(
-        (o) => o.current_status === "Completed",
-      ).length;
-      return {
-        region: region.name,
-        total: regionObligations.length,
-        completed: completed,
-        complianceRate:
-          regionObligations.length > 0
-            ? Math.round((completed / regionObligations.length) * 100)
-            : 0,
-      };
-    });
-
-    return {
-      title: "Regional Compliance Report",
-      regions: regionalData,
-      overallCompliance:
-        regionalData.length > 0
-          ? regionalData.reduce((acc, r) => acc + r.complianceRate, 0) /
-            regionalData.length
-          : 0,
-      filters: {
-        domain: selectedDomain,
-        policy: selectedPolicy,
-        clause: selectedClause,
-        subRegion: selectedSubRegion,
-        month: selectedMonth,
-        year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
-      },
-    };
-  };
-
-  const generateEvidenceReport = (obligations, evidence) => {
-    const obligationsWithEvidence = new Set();
-    const evidenceData = [];
-
-    evidence.forEach((item) => {
-      if (item.obligation_id) {
-        obligationsWithEvidence.add(item.obligation_id);
-        evidenceData.push({
-          evidence_id: item.id,
-          obligation_id: item.obligation?.obligation_id || "N/A",
-          obligation_name: item.obligation?.name || "Unknown",
-          file_name: item.file_name,
-          file_url: item.file_url,
-          file_type: item.file_type,
-          file_size: item.file_size,
-          uploaded_at: item.uploaded_at,
-          status: item.status,
-          domain: item.obligation?.domain || "",
-          evidence_type: item.obligation?.evidence_type || "",
-          region: item.obligation?.region || "",
-        });
-      }
-    });
-
-    const obligationsWithEvidenceRequired = obligations
-      .filter((o) => o.evidence_required && !obligationsWithEvidence.has(o.id))
-      .map((o) => ({
-        obligation_id: o.obligation_id,
-        obligation_name: o.name,
-        domain: o.domain,
-        evidence_type: o.evidence_type || "Not specified",
-        status: o.current_status,
-        has_evidence: false,
-      }));
-
-    return {
-      title: "Evidence Report",
-      totalEvidenceFiles: evidenceData.length,
-      totalObligationsWithEvidence: obligationsWithEvidence.size,
-      totalObligationsRequiringEvidence: obligations.filter(
-        (o) => o.evidence_required,
-      ).length,
-      evidenceFiles: evidenceData,
-      obligationsWithoutEvidence: obligationsWithEvidenceRequired,
-      filters: {
-        domain: selectedDomain,
-        policy: selectedPolicy,
-        clause: selectedClause,
-        subRegion: selectedSubRegion,
-        month: selectedMonth,
-        year: selectedYear,
-        region: !isAdmin ? userRegion : "All Regions",
-      },
-    };
-  };
-
-  // FIXED: Download only region-specific evidence
+  // Download all documents
   const downloadAllDocuments = async () => {
     if (!allEvidence || allEvidence.length === 0) {
-      alert("No documents found to download.");
+      toast.warning("No documents found to download.");
       return;
     }
 
@@ -621,29 +420,66 @@ const Reports = () => {
       const monthLabel = selectedMonth ? months.find(m => m.value === selectedMonth)?.label : '';
       const yearLabel = selectedYear || '';
 
-      // Filter evidence by region for non-admin users
+      // Filter evidence by region
       let evidenceToDownload = allEvidence;
-      if (!isAdmin && userRegion) {
-        // Get region ID
-        const { data: regionData } = await supabase
-          .from('regions')
-          .select('id')
-          .eq('name', userRegion)
-          .single();
-        
-        if (regionData) {
-          evidenceToDownload = allEvidence.filter(item => item.region_id === regionData.id);
+      if (selectedRegion) {
+        const regionId = await getRegionId(selectedRegion);
+        if (regionId) {
+          evidenceToDownload = allEvidence.filter(item => item.region_id === regionId);
+        }
+      } else if (!isAdmin && userRegion) {
+        const regionId = await getRegionId(userRegion);
+        if (regionId) {
+          evidenceToDownload = allEvidence.filter(item => item.region_id === regionId);
         } else {
-          alert("Your region could not be identified. Please contact administrator.");
+          toast.error("Your region could not be identified. Please contact administrator.");
           setDownloading(false);
           return;
         }
       }
 
       if (evidenceToDownload.length === 0) {
-        alert(`No documents found for ${!isAdmin ? `region ${userRegion}` : 'the selected filters'}.`);
+        toast.warning(`No documents found for ${selectedRegion || (!isAdmin ? userRegion : 'the selected filters')}.`);
         setDownloading(false);
         return;
+      }
+
+      // IMPORTANT FIX: evidence.obligation_id is the TEXT obligation_id (e.g., "FMP-027")
+      // NOT the bigserial ID. So we query using obligation_id (text) field.
+      const obligationTextIds = [...new Set(evidenceToDownload.map(e => e.obligation_id).filter(Boolean))];
+      let obligationMap = {};
+      if (obligationTextIds.length > 0) {
+        const { data: obligationsData, error: obligationsError } = await supabase
+          .from('compliance_obligations')
+          .select('obligation_id, obligation_name, domain')
+          .in('obligation_id', obligationTextIds);
+        
+        if (obligationsError) {
+          console.error('Error fetching obligations for download:', obligationsError);
+          toast.error('Failed to fetch obligation details');
+        } else if (obligationsData) {
+          obligationsData.forEach(ob => {
+            obligationMap[ob.obligation_id] = ob;
+          });
+        }
+      }
+
+      // Get region names for region_ids
+      const regionIds = [...new Set(evidenceToDownload.map(e => e.region_id).filter(Boolean))];
+      let regionMap = {};
+      if (regionIds.length > 0) {
+        const { data: regionsData, error: regionsError } = await supabase
+          .from('regions')
+          .select('id, name')
+          .in('id', regionIds);
+        
+        if (regionsError) {
+          console.error('Error fetching regions for download:', regionsError);
+        } else if (regionsData) {
+          regionsData.forEach(r => {
+            regionMap[r.id] = r.name;
+          });
+        }
       }
 
       // Process each evidence file
@@ -652,33 +488,39 @@ const Reports = () => {
 
         try {
           const response = await fetch(evidence.file_url);
-          if (!response.ok)
-            throw new Error(`Failed to download: ${evidence.file_name}`);
+          if (!response.ok) throw new Error(`Failed to download: ${evidence.file_name}`);
 
           const blob = await response.blob();
 
-          const obligation = evidence.obligation || {};
-          const obligationId = obligation.obligation_id || "unknown";
+          const obligation = obligationMap[evidence.obligation_id] || {};
+          const obligationId = obligation.obligation_id || evidence.obligation_id || "unknown";
           const domain = obligation.domain || "unknown";
-          const region = obligation.region || userRegion || "unknown";
+          
+          // Get region name
+          let region = regionMap[evidence.region_id] || selectedRegion || userRegion || "unknown";
           
           const fileExtension = evidence.file_name.split(".").pop() || "";
           
-          let fileName = `${obligationId}_${domain}`;
+          // Format: obligation_id_domain_region_monthyear
+          let fileName = `${obligationId}`;
           
-          // Add region to filename
-          if (region) {
+          if (domain && domain !== "unknown") {
+            fileName += `_${domain.replace(/\s/g, '')}`;
+          }
+          
+          if (region && region !== "unknown") {
             fileName += `_${region.replace(/\s/g, '')}`;
           }
           
-          if (monthLabel && yearLabel) {
-            fileName += `_${monthLabel}_${yearLabel}`;
-          } else if (yearLabel) {
-            fileName += `_${yearLabel}`;
+          // Add month/year if selected
+          if (selectedMonth && selectedYear) {
+            const monthName = months.find(m => m.value === selectedMonth)?.label || selectedMonth;
+            fileName += `_${monthName}${selectedYear}`;
+          } else if (selectedYear) {
+            fileName += `_${selectedYear}`;
           }
           
           fileName += `.${fileExtension}`;
-          
           fileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
           documentsFolder.file(fileName, blob);
@@ -689,7 +531,7 @@ const Reports = () => {
       }
 
       if (downloadedCount === 0) {
-        alert("No documents could be downloaded.");
+        toast.error("No documents could be downloaded.");
         setDownloading(false);
         return;
       }
@@ -697,18 +539,23 @@ const Reports = () => {
       const zipBlob = await zip.generateAsync({ type: "blob" });
 
       let zipFileName = `compliance_documents`;
-      if (!isAdmin && userRegion) {
+      if (selectedRegion) {
+        zipFileName += `_${selectedRegion.replace(/\s/g, '')}`;
+      } else if (!isAdmin && userRegion) {
         zipFileName += `_${userRegion.replace(/\s/g, '')}`;
       }
       if (selectedDomain) zipFileName += `_${selectedDomain}`;
-      if (selectedSubRegion) zipFileName += `_${selectedSubRegion}`;
       if (selectedPolicy) {
         const policyName = policies.find(p => p.id === selectedPolicy)?.name || selectedPolicy;
         zipFileName += `_${policyName}`;
       }
       if (selectedClause) zipFileName += `_clause_${selectedClause}`;
-      if (monthLabel && yearLabel) zipFileName += `_${monthLabel}_${yearLabel}`;
-      if (yearLabel && !monthLabel) zipFileName += `_${yearLabel}`;
+      if (selectedMonth && selectedYear) {
+        const monthName = months.find(m => m.value === selectedMonth)?.label || selectedMonth;
+        zipFileName += `_${monthName}${selectedYear}`;
+      } else if (selectedYear) {
+        zipFileName += `_${selectedYear}`;
+      }
       zipFileName += `_${new Date().toISOString().split("T")[0]}.zip`;
       
       zipFileName = zipFileName.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -722,12 +569,10 @@ const Reports = () => {
       document.body.removeChild(link);
       window.URL.revokeObjectURL(url);
 
-      alert(
-        `Successfully downloaded ${downloadedCount} of ${totalFiles} documents ${!isAdmin ? `for region ${userRegion}` : ''}.`,
-      );
+      toast.success(`Successfully downloaded ${downloadedCount} of ${totalFiles} documents.`);
     } catch (error) {
       console.error("Error downloading documents:", error);
-      alert("Failed to download documents. Please try again.");
+      toast.error("Failed to download documents. Please try again.");
     } finally {
       setDownloading(false);
     }
@@ -735,34 +580,26 @@ const Reports = () => {
 
   const getStatusBadge = (status) => {
     const badges = {
-      Completed: "bg-green-100 text-green-800",
-      "In Progress": "bg-blue-100 text-blue-800",
-      Pending: "bg-yellow-100 text-yellow-800",
+      Closed: "bg-green-100 text-green-800",
+      "Submitted/Under Review": "bg-blue-100 text-blue-800",
+      Open: "bg-yellow-100 text-yellow-800",
       Overdue: "bg-red-100 text-red-800",
-      "Not Started": "bg-gray-100 text-gray-800",
+      Pending: "bg-yellow-100 text-yellow-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
   };
-
-  const reports = [
-    { id: "compliance-summary", name: "Compliance Summary" },
-    { id: "pending-obligations", name: "Pending Obligations" },
-    { id: "overdue-obligations", name: "Overdue Obligations" },
-    { id: "audit-readiness", name: "Audit Readiness Report" },
-    { id: "regional-compliance", name: "Regional Compliance" },
-    { id: "evidence-report", name: "Evidence Report" },
-  ];
 
   const clearFilters = () => {
     setSelectedDomain("");
     setSelectedPolicy("");
     setSelectedClause("");
-    setSelectedSubRegion("");
+    setSelectedRegion("");
     setSelectedMonth("");
     setSelectedYear("");
     setPolicies(allPolicies);
     setClauses(allClauses);
-    setSubRegions(allSubRegions);
+    setRegionOptions(allRegionOptions);
+    toast.info("Filters cleared");
   };
 
   if (loading) {
@@ -826,32 +663,11 @@ const Reports = () => {
         <div className="lg:col-span-1">
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-              Report Configuration
+              Report Filters
             </h3>
 
             <div className="space-y-3 sm:space-y-4">
-              <div>
-                <label className="block text-xs sm:text-sm font-medium text-gray-700 mb-1">
-                  Report Type
-                </label>
-                <select
-                  value={reportType}
-                  onChange={(e) => setReportType(e.target.value)}
-                  className="w-full px-3 py-2 text-sm sm:text-base border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
-                >
-                  {reports.map((report) => (
-                    <option key={report.id} value={report.id}>
-                      {report.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               <div className="border-t border-gray-200 pt-3 sm:pt-4">
-                <p className="text-xs sm:text-sm font-medium text-gray-700 mb-2">
-                  Filters
-                </p>
-
                 <div className="space-y-3">
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">
@@ -909,15 +725,15 @@ const Reports = () => {
 
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">
-                      Sub Region
+                      Region
                     </label>
                     <select
-                      value={selectedSubRegion}
-                      onChange={(e) => setSelectedSubRegion(e.target.value)}
+                      value={selectedRegion}
+                      onChange={(e) => setSelectedRegion(e.target.value)}
                       className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
                     >
-                      <option value="">All Sub Regions</option>
-                      {subRegions.map((region) => (
+                      <option value="">All Regions</option>
+                      {regionOptions.map((region) => (
                         <option key={region} value={region}>
                           {region}
                         </option>
@@ -965,12 +781,12 @@ const Reports = () => {
                 </div>
               </div>
 
-              {/* Download Button - Region filtered */}
+              {/* Download Button */}
               <div className="pt-4 border-t border-gray-200">
                 <button
                   onClick={downloadAllDocuments}
                   disabled={downloading || allEvidence.length === 0}
-                  className="w-full bg-[#ff0099] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#7ab52e] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
+                  className="w-full bg-[#ff0099] text-white px-4 py-2.5 sm:py-3 rounded-md hover:bg-[#e40076] transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed shadow-md text-sm sm:text-base"
                 >
                   {downloading ? (
                     <>
@@ -1017,7 +833,7 @@ const Reports = () => {
                 </button>
                 {!isAdmin && userRegion && (
                   <p className="text-[9px] sm:text-[10px] text-green-600 text-center mt-1.5">
-                    ✓ Only documents from {userRegion} will be downloaded
+                    ✓ Only documents from {selectedRegion || userRegion} will be downloaded
                   </p>
                 )}
                 {allEvidence.length === 0 && !downloading && (
@@ -1044,10 +860,11 @@ const Reports = () => {
               </h3>
               {reportData?.filters && (
                 <span className="text-[10px] sm:text-xs text-gray-500">
-                  {reportData.filters.region && `Region: ${reportData.filters.region} `}
+                  {reportData.filters.userRegion && `Region: ${reportData.filters.userRegion} `}
                   {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                   {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                   {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
+                  {reportData.filters.region && reportData.filters.region !== "All Regions" && `• Sub Region: ${reportData.filters.region} `}
                   {reportData.filters.month && reportData.filters.year && 
                     `• ${months.find(m => m.value === reportData.filters.month)?.label} ${reportData.filters.year}`
                   }
@@ -1057,413 +874,85 @@ const Reports = () => {
 
             <div className="space-y-4 sm:space-y-6">
               {/* Summary Stats */}
-              {reportType === "compliance-summary" && reportData && (
+              {reportData && (
                 <>
                   <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
                       <p className="text-[10px] sm:text-sm text-gray-500">Total Obligations</p>
                       <p className="text-lg sm:text-2xl font-bold text-gray-900">
-                        {reportData.totalObligations}
+                        {reportData.totalObligations || 0}
                       </p>
                     </div>
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
                       <p className="text-[10px] sm:text-sm text-gray-500">Compliance Rate</p>
                       <p className="text-lg sm:text-2xl font-bold text-[#8cc63e]">
-                        {stats.overallCompliance}%
+                        {stats.overallCompliance || 0}%
                       </p>
                     </div>
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
-                      <p className="text-[10px] sm:text-sm text-gray-500">Completed</p>
+                      <p className="text-[10px] sm:text-sm text-gray-500">Closed</p>
                       <p className="text-lg sm:text-2xl font-bold text-[#8cc63e]">
-                        {reportData.completed}
+                        {reportData.closed || 0}
                       </p>
                     </div>
                     <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
                       <p className="text-[10px] sm:text-sm text-gray-500">Overdue</p>
                       <p className="text-lg sm:text-2xl font-bold text-red-600">
-                        {reportData.overdue}
+                        {reportData.overdue || 0}
                       </p>
                     </div>
                   </div>
 
                   {/* Domain Compliance */}
-                  <div>
-                    <h4 className="text-xs sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
-                      Compliance by Domain
-                    </h4>
-                    <div className="space-y-2">
-                      {domainData.domains.map((domain, index) => (
-                        <div key={domain}>
-                          <div className="flex justify-between text-[10px] sm:text-sm">
-                            <span className="text-gray-600 truncate max-w-[150px] sm:max-w-none">{domain}</span>
-                            <span className="font-medium">
-                              {domainData.compliance[index]}%
-                            </span>
-                          </div>
-                          <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
-                            <div
-                              className={`h-1.5 sm:h-2 rounded-full ${
-                                domainData.compliance[index] >= 80
-                                  ? "bg-[#8cc63e]"
-                                  : domainData.compliance[index] >= 60
-                                    ? "bg-yellow-500"
-                                    : "bg-red-500"
-                              }`}
-                              style={{
-                                width: `${domainData.compliance[index]}%`,
-                              }}
-                            ></div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* Pending Obligations */}
-              {reportType === "pending-obligations" && reportData && (
-                <>
-                  <div className="bg-yellow-50 p-3 sm:p-4 rounded-lg border border-yellow-200">
-                    <p className="text-xs sm:text-sm text-yellow-800">
-                      Total Pending Obligations:{" "}
-                      <span className="font-bold">
-                        {reportData.totalPending}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50 sticky top-0">
-                        <tr>
-                          <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            ID
-                          </th>
-                          <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Name
-                          </th>
-                          <th className="hidden sm:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Domain
-                          </th>
-                          <th className="hidden md:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Frequency
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {reportData.pendingObligations?.slice(0, 10).map((obligation) => (
-                          <tr key={obligation.id}>
-                            <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.obligation_id}
-                            </td>
-                            <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm truncate max-w-[80px] sm:max-w-[150px]">
-                              {obligation.name}
-                            </td>
-                            <td className="hidden sm:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.domain}
-                            </td>
-                            <td className="hidden md:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.frequency}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {reportData.pendingObligations?.length > 10 && (
-                      <p className="text-[10px] sm:text-xs text-gray-500 text-center py-2">
-                        Showing 10 of {reportData.pendingObligations.length}
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* Overdue Obligations */}
-              {reportType === "overdue-obligations" && reportData && (
-                <>
-                  <div className="bg-red-50 p-3 sm:p-4 rounded-lg border border-red-200">
-                    <p className="text-xs sm:text-sm text-red-800">
-                      Total Overdue Obligations:{" "}
-                      <span className="font-bold">
-                        {reportData.totalOverdue}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="overflow-x-auto max-h-96 overflow-y-auto">
-                    <table className="min-w-full divide-y divide-gray-200">
-                      <thead className="bg-gray-50 sticky top-0">
-                        <tr>
-                          <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            ID
-                          </th>
-                          <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Name
-                          </th>
-                          <th className="hidden sm:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Domain
-                          </th>
-                          <th className="hidden md:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                            Accountable
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody className="bg-white divide-y divide-gray-200">
-                        {reportData.overdueObligations?.slice(0, 10).map((obligation) => (
-                          <tr key={obligation.id}>
-                            <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.obligation_id}
-                            </td>
-                            <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm truncate max-w-[80px] sm:max-w-[150px]">
-                              {obligation.name}
-                            </td>
-                            <td className="hidden sm:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.domain}
-                            </td>
-                            <td className="hidden md:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                              {obligation.accountable}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                    {reportData.overdueObligations?.length > 10 && (
-                      <p className="text-[10px] sm:text-xs text-gray-500 text-center py-2">
-                        Showing 10 of {reportData.overdueObligations.length}
-                      </p>
-                    )}
-                  </div>
-                </>
-              )}
-
-              {/* Audit Readiness */}
-              {reportType === "audit-readiness" && reportData && (
-                <>
-                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                    <div className="bg-blue-50 p-3 sm:p-4 rounded-lg border border-blue-200">
-                      <p className="text-[10px] sm:text-sm text-blue-800">Readiness Score</p>
-                      <p className="text-xl sm:text-3xl font-bold text-blue-600">
-                        {reportData.readinessScore}%
-                      </p>
-                    </div>
-                    <div className="bg-green-50 p-3 sm:p-4 rounded-lg border border-green-200">
-                      <p className="text-[10px] sm:text-sm text-green-800">Readiness Level</p>
-                      <p className="text-base sm:text-xl font-bold text-green-600">
-                        {reportData.readinessLevel}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="bg-gray-50 p-3 sm:p-4 rounded-lg">
-                    <h5 className="font-medium text-gray-700 mb-1 sm:mb-2 text-xs sm:text-sm">
-                      Recommendations
-                    </h5>
-                    <ul className="list-disc list-inside space-y-0.5 sm:space-y-1">
-                      {reportData.recommendations?.map((rec, idx) => (
-                        <li key={idx} className="text-[10px] sm:text-sm text-gray-600">
-                          {rec}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </>
-              )}
-
-              {/* Regional Compliance */}
-              {reportType === "regional-compliance" && reportData && (
-                <>
-                  <div className="bg-indigo-50 p-3 sm:p-4 rounded-lg border border-indigo-200">
-                    <p className="text-xs sm:text-sm text-indigo-800">
-                      Overall Regional Compliance:{" "}
-                      <span className="font-bold">
-                        {Math.round(reportData.overallCompliance)}%
-                      </span>
-                    </p>
-                  </div>
-                  <div className="space-y-3 sm:space-y-4 max-h-96 overflow-y-auto">
-                    {reportData.regions?.map((region) => (
-                      <div
-                        key={region.region}
-                        className="border rounded-lg p-3 sm:p-4"
-                      >
-                        <div className="flex justify-between items-center mb-1 sm:mb-2">
-                          <span className="font-medium text-gray-900 text-xs sm:text-sm">
-                            {region.region}
-                          </span>
-                          <span className="text-xs sm:text-sm font-bold text-gray-600">
-                            {region.complianceRate}%
-                          </span>
-                        </div>
-                        <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
-                          <div
-                            className={`h-1.5 sm:h-2 rounded-full ${
-                              region.complianceRate >= 80
-                                ? "bg-[#8cc63e]"
-                                : region.complianceRate >= 60
-                                  ? "bg-yellow-500"
-                                  : "bg-red-500"
-                            }`}
-                            style={{ width: `${region.complianceRate}%` }}
-                          ></div>
-                        </div>
-                        <div className="flex justify-between mt-1 sm:mt-2 text-[10px] sm:text-xs text-gray-500">
-                          <span>Total: {region.total}</span>
-                          <span>Completed: {region.completed}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Evidence Report */}
-              {reportType === "evidence-report" && reportData && (
-                <>
-                  <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                    <div className="bg-purple-50 p-3 sm:p-4 rounded-lg border border-purple-200">
-                      <p className="text-[10px] sm:text-sm text-purple-800">
-                        Evidence Files
-                      </p>
-                      <p className="text-xl sm:text-2xl font-bold text-purple-600">
-                        {reportData.totalEvidenceFiles || 0}
-                      </p>
-                    </div>
-                    <div className="bg-blue-50 p-3 sm:p-4 rounded-lg border border-blue-200">
-                      <p className="text-[10px] sm:text-sm text-blue-800">
-                        Obligations with Evidence
-                      </p>
-                      <p className="text-xl sm:text-2xl font-bold text-blue-600">
-                        {reportData.totalObligationsWithEvidence || 0}
-                      </p>
-                    </div>
-                  </div>
-
-                  {reportData.evidenceFiles?.length > 0 && (
+                  {domainData.domains && domainData.domains.length > 0 ? (
                     <div>
-                      <h4 className="text-[10px] sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
-                        Uploaded Evidence Files {!isAdmin && userRegion && `(${userRegion})`}
+                      <h4 className="text-xs sm:text-sm font-medium text-gray-700 mb-2 sm:mb-3">
+                        Compliance by Domain
                       </h4>
-                      <div className="overflow-x-auto max-h-60 overflow-y-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50 sticky top-0">
-                            <tr>
-                              <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Obligation
-                              </th>
-                              <th className="hidden sm:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                File Name
-                              </th>
-                              <th className="hidden md:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Region
-                              </th>
-                              <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Status
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {reportData.evidenceFiles
-                              ?.slice(0, 10)
-                              .map((item) => (
-                                <tr key={item.evidence_id}>
-                                  <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                                    {item.obligation_id}
-                                  </td>
-                                  <td className="hidden sm:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm truncate max-w-[100px] sm:max-w-[150px]">
-                                    {item.file_name}
-                                  </td>
-                                  <td className="hidden md:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                                    {item.region || "N/A"}
-                                  </td>
-                                  <td className="px-2 sm:px-4 py-2">
-                                    <span
-                                      className={`px-1.5 sm:px-2 py-0.5 sm:py-1 text-[8px] sm:text-xs rounded-full ${getStatusBadge(item.status)}`}
-                                    >
-                                      {item.status}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ))}
-                          </tbody>
-                        </table>
-                        {reportData.evidenceFiles?.length > 10 && (
-                          <p className="text-[10px] sm:text-xs text-gray-500 text-center py-2">
-                            Showing 10 of {reportData.evidenceFiles.length}
-                          </p>
-                        )}
+                      <div className="space-y-2">
+                        {domainData.domains.map((domain, index) => (
+                          <div key={domain}>
+                            <div className="flex justify-between text-[10px] sm:text-sm">
+                              <span className="text-gray-600 truncate max-w-[150px] sm:max-w-none">{domain}</span>
+                              <span className="font-medium">
+                                {domainData.compliance[index] || 0}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-1.5 sm:h-2">
+                              <div
+                                className={`h-1.5 sm:h-2 rounded-full ${
+                                  (domainData.compliance[index] || 0) >= 80
+                                    ? "bg-[#8cc63e]"
+                                    : (domainData.compliance[index] || 0) >= 60
+                                      ? "bg-yellow-500"
+                                      : "bg-red-500"
+                                }`}
+                                style={{
+                                  width: `${domainData.compliance[index] || 0}%`,
+                                }}
+                              ></div>
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  )}
-
-                  {reportData.obligationsWithoutEvidence?.length > 0 && (
-                    <div>
-                      <h4 className="text-[10px] sm:text-sm font-medium text-red-700 mb-2 sm:mb-3">
-                        Obligations Without Evidence
-                      </h4>
-                      <div className="overflow-x-auto max-h-60 overflow-y-auto">
-                        <table className="min-w-full divide-y divide-gray-200">
-                          <thead className="bg-gray-50 sticky top-0">
-                            <tr>
-                              <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                ID
-                              </th>
-                              <th className="hidden sm:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Name
-                              </th>
-                              <th className="hidden md:table-cell px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Domain
-                              </th>
-                              <th className="px-2 sm:px-4 py-2 text-left text-[10px] sm:text-xs font-medium text-gray-500 uppercase">
-                                Status
-                              </th>
-                            </tr>
-                          </thead>
-                          <tbody className="bg-white divide-y divide-gray-200">
-                            {reportData.obligationsWithoutEvidence.slice(0, 10).map(
-                              (item) => (
-                                <tr key={item.obligation_id}>
-                                  <td className="px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                                    {item.obligation_id}
-                                  </td>
-                                  <td className="hidden sm:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm truncate max-w-[100px] sm:max-w-[150px]">
-                                    {item.obligation_name}
-                                  </td>
-                                  <td className="hidden md:table-cell px-2 sm:px-4 py-2 text-[10px] sm:text-sm">
-                                    {item.domain}
-                                  </td>
-                                  <td className="px-2 sm:px-4 py-2">
-                                    <span
-                                      className={`px-1.5 sm:px-2 py-0.5 sm:py-1 text-[8px] sm:text-xs rounded-full ${getStatusBadge(item.status)}`}
-                                    >
-                                      {item.status}
-                                    </span>
-                                  </td>
-                                </tr>
-                              ),
-                            )}
-                          </tbody>
-                        </table>
-                        {reportData.obligationsWithoutEvidence.length > 10 && (
-                          <p className="text-[10px] sm:text-xs text-gray-500 text-center py-2">
-                            Showing 10 of {reportData.obligationsWithoutEvidence.length}
-                          </p>
-                        )}
-                      </div>
+                  ) : (
+                    <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
+                      <p className="text-sm text-yellow-800">No domain compliance data available</p>
                     </div>
                   )}
                 </>
               )}
 
               <div className="text-center text-[10px] sm:text-sm text-gray-500">
-                <p>
-                  Preview of{" "}
-                  {reports.find((r) => r.id === reportType)?.name}
-                </p>
+                <p>Compliance Summary Report</p>
                 {reportData?.filters && (
                   <p className="text-[8px] sm:text-xs mt-0.5 sm:mt-1">
-                    {reportData.filters.region && `Region: ${reportData.filters.region} `}
+                    {reportData.filters.userRegion && `Region: ${reportData.filters.userRegion} `}
                     {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                     {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                     {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
-                    {reportData.filters.subRegion && `• Sub Region: ${reportData.filters.subRegion} `}
+                    {reportData.filters.region && reportData.filters.region !== "All Regions" && `• Sub Region: ${reportData.filters.region} `}
                     {reportData.filters.month && reportData.filters.year && 
                       `• ${months.find(m => m.value === reportData.filters.month)?.label} ${reportData.filters.year}`
                     }

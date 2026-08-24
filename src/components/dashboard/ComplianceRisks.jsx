@@ -35,47 +35,124 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
         regionId = await getRegionId(userRegion);
       }
 
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      // Get overdue progress from compliance_progress
       let progressQuery = supabase
-        .from('obligation_progress')
-        .select('obligation_id')
-        .eq('status', 'Overdue');
+        .from('compliance_progress')
+        .select(`
+          id,
+          obligation_id,
+          region_id,
+          occurrence_date,
+          calculated_due_date,
+          status,
+          comments,
+          evidence_id,
+          uploaded_by,
+          updated_by,
+          created_at,
+          updated_at,
+          obligation:compliance_obligations(
+            obligation_id,
+            obligation_name,
+            domain,
+            frequency,
+            description,
+            responsible,
+            accountable,
+            compliance_weight,
+            evidence_required,
+            evidence_type,
+            mandatory,
+            policy,
+            clause,
+            due_date_rule
+          )
+        `);
 
       if (regionId) {
         progressQuery = progressQuery.eq('region_id', regionId);
       }
 
-      const { data: overdueProgress, error } = await progressQuery;
-      if (error) throw error;
+      // Get non-closed obligations with calculated_due_date in the past
+      progressQuery = progressQuery.neq('status', 'Closed');
 
-      const overdueIds = overdueProgress?.map(p => p.obligation_id) || [];
+      const { data: progressData, error: progressError } = await progressQuery;
 
-      if (overdueIds.length === 0) {
+      if (progressError) {
+        console.error('Progress query error:', progressError);
+        throw progressError;
+      }
+
+      if (!progressData || progressData.length === 0) {
         setRisks([]);
         setLoading(false);
         return;
       }
 
-      const { data: overdueObligations } = await supabase
-        .from('obligations')
-        .select('*')
-        .in('id', overdueIds)
-        .gte('compliance_weight', 7)
-        .limit(5);
+      // Filter overdue items
+      const overdueItems = progressData.filter(item => {
+        if (!item.calculated_due_date) return false;
+        const dueDate = new Date(item.calculated_due_date);
+        dueDate.setHours(0, 0, 0, 0);
+        return dueDate < today && item.status !== 'Closed';
+      });
 
-      if (!overdueObligations || overdueObligations.length === 0) {
+      if (overdueItems.length === 0) {
         setRisks([]);
         setLoading(false);
         return;
       }
 
-      const risksData = overdueObligations.map(o => ({
-        severity: o.compliance_weight >= 9 ? "Critical" : 
-                 o.compliance_weight >= 7 ? "High" : "Medium",
-        title: `${o.name} — ${o.region || 'Unknown Region'}`,
-        description: o.description || 'Obligation overdue',
-        status: o.current_status,
-        obligation_id: o.obligation_id,
-      }));
+      // Map to risks data with severity based on compliance_weight
+      const risksData = overdueItems
+        .map(item => {
+          const obligation = item.obligation || {};
+          const weight = obligation.compliance_weight || 1;
+          
+          let severity = "Medium";
+          if (weight >= 9) severity = "Critical";
+          else if (weight >= 7) severity = "High";
+          else if (weight >= 5) severity = "Medium";
+          else severity = "Low";
+
+          // Calculate days overdue
+          const dueDate = new Date(item.calculated_due_date);
+          dueDate.setHours(0, 0, 0, 0);
+          const diffTime = today - dueDate;
+          const daysOverdue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+          // Get region name
+          let regionName = 'Unknown Region';
+          if (item.region_id) {
+            // Try to get from obligation or use a fallback
+            regionName = obligation.region || 'Unknown Region';
+          }
+
+          return {
+            severity: severity,
+            title: `${obligation.obligation_name || 'Unknown Obligation'} — ${regionName}`,
+            description: obligation.description || 'Obligation overdue',
+            status: item.status,
+            obligation_id: obligation.obligation_id || item.obligation_id,
+            due_date: item.calculated_due_date,
+            days_overdue: daysOverdue,
+            compliance_weight: weight,
+            domain: obligation.domain || 'N/A',
+            evidence_id: item.evidence_id,
+          };
+        })
+        // Sort by severity (Critical first) and then by days overdue
+        .sort((a, b) => {
+          const severityOrder = { 'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3 };
+          if (severityOrder[a.severity] !== severityOrder[b.severity]) {
+            return severityOrder[a.severity] - severityOrder[b.severity];
+          }
+          return b.days_overdue - a.days_overdue;
+        })
+        .slice(0, 5); // Limit to top 5 risks
 
       setRisks(risksData);
 
@@ -92,8 +169,29 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
       Critical: "bg-red-100 text-red-800 border-red-300",
       High: "bg-orange-100 text-orange-800 border-orange-300",
       Medium: "bg-yellow-100 text-yellow-800 border-yellow-300",
+      Low: "bg-blue-100 text-blue-800 border-blue-300",
     };
     return styles[severity] || "bg-gray-100 text-gray-800 border-gray-300";
+  };
+
+  const getSeverityIcon = (severity) => {
+    const icons = {
+      Critical: '🔴',
+      High: '🟠',
+      Medium: '🟡',
+      Low: '🔵',
+    };
+    return icons[severity] || '⚪';
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const date = new Date(dateString);
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
   };
 
   if (loading) {
@@ -123,7 +221,11 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
           Top Compliance Risks
         </h3>
         <div className="text-center py-6 text-gray-500 text-sm">
-          No high-risk gaps identified
+          <svg className="h-12 w-12 mx-auto text-gray-300 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p>No high-risk gaps identified</p>
+          <p className="text-xs text-gray-400 mt-1">All obligations are on track ✅</p>
         </div>
       </div>
     );
@@ -135,43 +237,87 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
         <h3 className="text-sm sm:text-base md:text-lg font-semibold text-gray-900">
           Top Compliance Risks
         </h3>
-        <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded-full">
-          {risks.length} risks
-        </span>
+        <div className="flex items-center gap-2">
+          <span className="text-xs bg-red-100 text-red-800 px-2 py-0.5 rounded-full">
+            {risks.filter(r => r.severity === 'Critical').length} critical
+          </span>
+          <span className="text-xs bg-orange-100 text-orange-800 px-2 py-0.5 rounded-full">
+            {risks.filter(r => r.severity === 'High').length} high
+          </span>
+        </div>
       </div>
       
       <div className="space-y-2 sm:space-y-3 max-h-80 overflow-y-auto">
         {risks.map((risk, index) => (
           <div
             key={index}
-            className={`border-l-4 rounded-lg p-3 sm:p-4 ${getSeverityStyles(risk.severity)}`}
+            className={`border-l-4 rounded-lg p-3 sm:p-4 ${getSeverityStyles(risk.severity)} cursor-pointer hover:shadow-md transition-shadow`}
+            onClick={() => {
+              if (risk.obligation_id) {
+                window.location.href = `/compliance/${risk.obligation_id}`;
+              }
+            }}
           >
             <div className="flex items-start justify-between gap-2">
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-base">{getSeverityIcon(risk.severity)}</span>
                   <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${getSeverityStyles(risk.severity)}`}>
                     {risk.severity}
                   </span>
-                  <h4 className="text-sm font-medium text-gray-900 break-words">
-                    {risk.title}
-                  </h4>
+                  <span className="text-[10px] font-medium text-gray-500">
+                    Weight: {risk.compliance_weight}
+                  </span>
+                  <span className="text-[10px] font-medium text-gray-500">
+                    {risk.domain}
+                  </span>
+                  {risk.evidence_id && (
+                    <span className="text-[10px] text-green-600">📎</span>
+                  )}
                 </div>
+                <h4 className="text-sm font-medium text-gray-900 mt-0.5 break-words">
+                  {risk.title}
+                </h4>
                 <p className="text-xs text-gray-600 mt-0.5 break-words">
                   {risk.description}
                 </p>
-                <div className="flex items-center gap-2 mt-1">
+                <div className="flex items-center gap-2 mt-1 flex-wrap">
                   <span className="text-[10px] text-gray-500">
                     ID: {risk.obligation_id}
                   </span>
                   <span className={`px-1.5 py-0.5 text-[9px] rounded-full bg-gray-200 text-gray-700`}>
                     {risk.status}
                   </span>
+                  <span className="text-[10px] text-red-600 font-medium">
+                    {risk.days_overdue} days overdue
+                  </span>
+                  <span className="text-[10px] text-gray-400">
+                    Due: {formatDate(risk.due_date)}
+                  </span>
                 </div>
+              </div>
+              <div className="flex-shrink-0">
+                <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
+                </svg>
               </div>
             </div>
           </div>
         ))}
       </div>
+
+      {/* Footer */}
+      {risks.length > 0 && (
+        <div className="mt-3 pt-2 border-t border-gray-100 flex justify-between text-[10px] text-gray-500">
+          <span>{risks.length} risks identified</span>
+          <button 
+            onClick={() => window.location.href = '/compliance'}
+            className="text-[#8cc63e] hover:underline font-medium"
+          >
+            View all →
+          </button>
+        </div>
+      )}
     </div>
   );
 };
