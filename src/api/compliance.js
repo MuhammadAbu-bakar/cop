@@ -1046,87 +1046,264 @@ export const getActivityHistory = async (obligationId, progressId = null) => {
 }
 
 // ============================================================
-// DASHBOARD STATS - FIXED FOR ADMIN VIEW
+// DASHBOARD STATS - FIXED
+// - Handles Supabase 1000-row limit using pagination
+// - Regional users see ONLY their region
+// - Admin users see ALL regions
+// - Only occurrence_date <= today is counted
+// - Correct status calculations
 // ============================================================
 
-export const getDashboardStats = async (userRegion = null, isAdmin = false) => {
+export const getDashboardStats = async (
+  userRegion = null,
+  isAdmin = false
+) => {
   try {
-    console.log('🔍 [DashboardStats] Fetching stats for:', { userRegion, isAdmin });
+    console.log("=================================================");
+    console.log("🔍 [DashboardStats] START");
+    console.log("👤 User Region:", userRegion);
+    console.log("👑 Is Admin:", isAdmin);
+    console.log("=================================================");
 
-    // Get region ID if user is regional (NOT admin)
+    // ---------------------------------------------------------
+    // 1. GET USER REGION ID
+    // ---------------------------------------------------------
+
     let regionId = null;
+
     if (!isAdmin && userRegion) {
       regionId = await getRegionId(userRegion);
-      console.log('🔍 [DashboardStats] Region ID:', regionId);
-    } else if (isAdmin) {
-      console.log('🔍 [DashboardStats] Admin mode - fetching ALL regions');
-    }
 
-    // ---------------------------------------------------------
-    // 1. GET ALL OBLIGATIONS
-    // ---------------------------------------------------------
-    const { data: obligations, error: obligationsError } = await supabase
-      .from('compliance_obligations')
-      .select('obligation_id, compliance_weight, obligation_type, mandatory');
+      console.log(
+        "👤 Regional User:",
+        userRegion,
+        "| Region ID:",
+        regionId
+      );
 
-    if (obligationsError) {
-      console.error('❌ [DashboardStats] Error fetching obligations:', obligationsError);
-      throw obligationsError;
-    }
-    console.log('✅ [DashboardStats] Obligations fetched:', obligations?.length || 0);
+      if (!regionId) {
+        console.warn(
+          "⚠️ Could not find region ID for:",
+          userRegion
+        );
 
-    // ---------------------------------------------------------
-    // 2. GET PROGRESS RECORDS - FILTER TO ONLY PAST/CURRENT (occurrence_date <= today)
-    // ---------------------------------------------------------
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const todayStr = today.toISOString().split('T')[0];
-    
-    console.log('📅 [DashboardStats] Filtering for obligations up to:', todayStr);
-
-    let progressQuery = supabase
-      .from('compliance_progress')
-      .select('*')
-      .lte('occurrence_date', todayStr);  // Only get records up to today
-
-    // IMPORTANT: For admin, DO NOT filter by region_id (get ALL regions)
-    // For regional user, filter by their region
-    if (!isAdmin && regionId) {
-      progressQuery = progressQuery.eq('region_id', regionId);
-      console.log('🔍 [DashboardStats] Filtering by region:', userRegion);
-    } else if (isAdmin) {
-      console.log('🔍 [DashboardStats] Admin - fetching ALL regions');
-    }
-
-    const { data: progressData, error: progressError } = await progressQuery;
-
-    if (progressError) {
-      console.error('❌ [DashboardStats] Error fetching progress:', progressError);
-      throw progressError;
-    }
-    
-    console.log('✅ [DashboardStats] Progress records fetched (up to today):', progressData?.length || 0);
-
-    // DEBUG: Log status distribution
-    if (progressData && progressData.length > 0) {
-      const statusCounts = {};
-      progressData.forEach(p => {
-        statusCounts[p.status] = (statusCounts[p.status] || 0) + 1;
-      });
-      console.log('📊 [DashboardStats] Status distribution:', statusCounts);
-      
-      // Log region distribution for admin
-      if (isAdmin) {
-        const regionDistribution = {};
-        progressData.forEach(p => {
-          regionDistribution[p.region_id] = (regionDistribution[p.region_id] || 0) + 1;
-        });
-        console.log('📊 [DashboardStats] Region distribution:', regionDistribution);
+        return {
+          overallCompliance: 0,
+          auditReadiness: 0,
+          totalObligations: 0,
+          completed: 0,
+          pending: 0,
+          overdue: 0,
+          inProgress: 0,
+          notStarted: 0,
+          highRiskGaps: 0,
+          regionsBelowTarget: 0,
+          regionsTotal: 1,
+          evidenceCompletion: 0,
+          mandatoryObligations: 0,
+          totalOccurrences: 0
+        };
       }
     }
 
-    if (!progressData || progressData.length === 0) {
-      console.warn('⚠️ [DashboardStats] No progress records found up to today');
+    // ---------------------------------------------------------
+    // 2. TODAY
+    // ---------------------------------------------------------
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const todayStr = today.toISOString().split("T")[0];
+
+    console.log(
+      "📅 Dashboard date:",
+      todayStr
+    );
+
+    // ---------------------------------------------------------
+    // 3. FETCH OBLIGATION INFORMATION
+    // ---------------------------------------------------------
+
+    const {
+      data: obligations,
+      error: obligationsError
+    } = await supabase
+      .from("compliance_obligations")
+      .select(
+        `
+        obligation_id,
+        compliance_weight,
+        obligation_type,
+        mandatory
+        `
+      );
+
+    if (obligationsError) {
+      console.error(
+        "❌ Error fetching obligations:",
+        obligationsError
+      );
+
+      throw obligationsError;
+    }
+
+    console.log(
+      "📋 Obligation definitions:",
+      obligations?.length || 0
+    );
+
+    // ---------------------------------------------------------
+    // 4. FETCH ALL PROGRESS RECORDS
+    //
+    // IMPORTANT:
+    // Supabase/PostgREST normally returns max 1000 rows
+    // per request.
+    //
+    // Therefore we fetch in pages:
+    // 0-999
+    // 1000-1999
+    // 2000-2999
+    // ...
+    // ---------------------------------------------------------
+
+    const PAGE_SIZE = 1000;
+
+    let progressData = [];
+    let pageStart = 0;
+
+    while (true) {
+      let progressQuery = supabase
+        .from("compliance_progress")
+        .select("*")
+        .lte("occurrence_date", todayStr)
+        .order("occurrence_date", {
+          ascending: false
+        })
+        .range(
+          pageStart,
+          pageStart + PAGE_SIZE - 1
+        );
+
+      // -------------------------------------------------------
+      // REGIONAL USER
+      // -------------------------------------------------------
+
+      if (!isAdmin && regionId) {
+        progressQuery = progressQuery.eq(
+          "region_id",
+          regionId
+        );
+
+        console.log(
+          `🔐 Region filter applied: ${userRegion} (${regionId})`
+        );
+      }
+
+      // -------------------------------------------------------
+      // ADMIN
+      // -------------------------------------------------------
+
+      if (isAdmin) {
+        console.log(
+          "👑 Admin mode: ALL regions"
+        );
+      }
+
+      const {
+        data: pageData,
+        error: pageError
+      } = await progressQuery;
+
+      if (pageError) {
+        console.error(
+          "❌ Error fetching progress page:",
+          pageError
+        );
+
+        throw pageError;
+      }
+
+      // -------------------------------------------------------
+      // NO MORE RECORDS
+      // -------------------------------------------------------
+
+      if (!pageData || pageData.length === 0) {
+        break;
+      }
+
+      // Add page to complete dataset
+      progressData.push(...pageData);
+
+      console.log(
+        `📦 Progress page fetched: ${pageStart} - ${
+          pageStart + pageData.length - 1
+        }`
+      );
+
+      console.log(
+        `📊 Page records: ${pageData.length}`
+      );
+
+      console.log(
+        `📊 Total records so far: ${progressData.length}`
+      );
+
+      // -------------------------------------------------------
+      // LAST PAGE
+      // -------------------------------------------------------
+
+      if (pageData.length < PAGE_SIZE) {
+        break;
+      }
+
+      pageStart += PAGE_SIZE;
+    }
+
+    // ---------------------------------------------------------
+    // 5. FINAL FETCH DEBUG
+    // ---------------------------------------------------------
+
+    console.log(
+      "================================================="
+    );
+
+    console.log(
+      "✅ TOTAL PROGRESS RECORDS:",
+      progressData.length
+    );
+
+    if (!isAdmin) {
+      console.log(
+        "🔐 Region:",
+        userRegion
+      );
+
+      console.log(
+        "🔐 Region ID:",
+        regionId
+      );
+    } else {
+      console.log(
+        "👑 Admin: ALL REGIONS"
+      );
+    }
+
+    console.log(
+      "================================================="
+    );
+
+    // ---------------------------------------------------------
+    // 6. NO DATA
+    // ---------------------------------------------------------
+
+    if (
+      !progressData ||
+      progressData.length === 0
+    ) {
+      console.warn(
+        "⚠️ No compliance progress records found."
+      );
+
       return {
         overallCompliance: 0,
         auditReadiness: 0,
@@ -1138,179 +1315,453 @@ export const getDashboardStats = async (userRegion = null, isAdmin = false) => {
         notStarted: 0,
         highRiskGaps: 0,
         regionsBelowTarget: 0,
-        regionsTotal: 0,
+        regionsTotal: isAdmin ? 0 : 1,
         evidenceCompletion: 0,
         mandatoryObligations: 0,
-        totalOccurrences: 0,
+        totalOccurrences: 0
       };
     }
 
     // ---------------------------------------------------------
-    // 3. CALCULATE STATS
+    // 7. DEBUG REGION DISTRIBUTION
     // ---------------------------------------------------------
-    const totalProgressRecords = progressData.length;
-    console.log('📊 [DashboardStats] Total progress records (up to today):', totalProgressRecords);
-    
-    // Get unique obligations that have progress up to today
-    const uniqueObligationsWithProgress = new Set(progressData.map(p => p.obligation_id));
-    const totalUniqueObligations = uniqueObligationsWithProgress.size;
-    console.log('📊 [DashboardStats] Unique obligations with progress:', totalUniqueObligations);
 
-    // Count by status - ONLY THREE STATUSES
-    const closedRecords = progressData.filter(p => p.status === 'Closed').length;
-    const submittedRecords = progressData.filter(p => p.status === 'Submitted/Under Review').length;
-    const openRecords = progressData.filter(p => p.status === 'Open').length;
-    
-    console.log('📊 [DashboardStats] Status counts (up to today):', {
-      closed: closedRecords,
-      submitted: submittedRecords,
-      open: openRecords,
-      total: totalProgressRecords
+    const regionDistribution = {};
+
+    progressData.forEach((record) => {
+      const id = record.region_id || "NULL";
+
+      regionDistribution[id] =
+        (regionDistribution[id] || 0) + 1;
     });
 
-    // Calculate overdue (based on calculated_due_date) - only for Open and Submitted/Under Review
-    const overdueRecords = progressData.filter(p => {
-      if (p.status === 'Closed') return false;
-      const dueDate = p.calculated_due_date || p.occurrence_date;
-      if (!dueDate) return false;
-      const dueDateObj = new Date(dueDate);
-      dueDateObj.setHours(0, 0, 0, 0);
-      return dueDateObj < today;
-    }).length;
-
-    console.log('📊 [DashboardStats] Overdue records:', overdueRecords);
-
-    // Calculate overall compliance
-    const overallCompliance = totalProgressRecords > 0 
-      ? Number(((closedRecords / totalProgressRecords) * 100).toFixed(1))
-      : 0;
-    console.log('📊 [DashboardStats] Overall compliance:', overallCompliance, '%');
-
-    // Audit readiness = (Closed + Submitted/Under Review) / Total
-    const auditReadiness = totalProgressRecords > 0 
-      ? Number((((closedRecords + submittedRecords) / totalProgressRecords) * 100).toFixed(1))
-      : 0;
-    console.log('📊 [DashboardStats] Audit readiness:', auditReadiness, '%');
-
-    // Not Started = Open records that are not overdue
-    const notStarted = openRecords - overdueRecords;
-    console.log('📊 [DashboardStats] Not started (Open - Overdue):', notStarted);
+    console.log(
+      "🌍 Region distribution:",
+      regionDistribution
+    );
 
     // ---------------------------------------------------------
-    // 4. CALCULATE WEIGHTED COMPLIANCE
+    // 8. DEBUG STATUS DISTRIBUTION
     // ---------------------------------------------------------
+
+    const statusDistribution = {};
+
+    progressData.forEach((record) => {
+      const status = record.status || "NULL";
+
+      statusDistribution[status] =
+        (statusDistribution[status] || 0) + 1;
+    });
+
+    console.log(
+      "📊 Status distribution:",
+      statusDistribution
+    );
+
+    // ---------------------------------------------------------
+    // 9. TOTAL OCCURRENCES
+    // ---------------------------------------------------------
+
+    const totalProgressRecords =
+      progressData.length;
+
+    // ---------------------------------------------------------
+    // 10. STATUS COUNTS
+    // ---------------------------------------------------------
+
+    const closedRecords =
+      progressData.filter(
+        (p) => p.status === "Closed"
+      ).length;
+
+    const submittedRecords =
+      progressData.filter(
+        (p) =>
+          p.status ===
+          "Submitted/Under Review"
+      ).length;
+
+    const openRecords =
+      progressData.filter(
+        (p) => p.status === "Open"
+      ).length;
+
+    // ---------------------------------------------------------
+    // 11. OVERDUE
+    //
+    // Closed records are NEVER overdue.
+    // ---------------------------------------------------------
+
+    const overdueRecords =
+      progressData.filter((p) => {
+        if (p.status === "Closed") {
+          return false;
+        }
+
+        const dueDate =
+          p.calculated_due_date ||
+          p.occurrence_date;
+
+        if (!dueDate) {
+          return false;
+        }
+
+        const dueDateObj =
+          new Date(dueDate);
+
+        dueDateObj.setHours(
+          0,
+          0,
+          0,
+          0
+        );
+
+        return dueDateObj < today;
+      }).length;
+
+    // ---------------------------------------------------------
+    // 12. NOT STARTED
+    //
+    // Open records that are NOT overdue.
+    // ---------------------------------------------------------
+
+    const notStarted = Math.max(
+      0,
+      openRecords - overdueRecords
+    );
+
+    // ---------------------------------------------------------
+    // 13. UNIQUE OBLIGATIONS
+    // ---------------------------------------------------------
+
+    const uniqueObligationIds =
+      new Set(
+        progressData.map(
+          (p) => p.obligation_id
+        )
+      );
+
+    const totalUniqueObligations =
+      uniqueObligationIds.size;
+
+    // ---------------------------------------------------------
+    // 14. OVERALL COMPLIANCE
+    // ---------------------------------------------------------
+
+    const overallCompliance =
+      totalProgressRecords > 0
+        ? Number(
+            (
+              (closedRecords /
+                totalProgressRecords) *
+              100
+            ).toFixed(1)
+          )
+        : 0;
+
+    // ---------------------------------------------------------
+    // 15. AUDIT READINESS
+    // ---------------------------------------------------------
+
+    const auditReadiness =
+      totalProgressRecords > 0
+        ? Number(
+            (
+              ((closedRecords +
+                submittedRecords) /
+                totalProgressRecords) *
+              100
+            ).toFixed(1)
+          )
+        : 0;
+
+    // ---------------------------------------------------------
+    // 16. WEIGHTED COMPLIANCE
+    // ---------------------------------------------------------
+
+    const obligationsMap = {};
+
+    (obligations || []).forEach(
+      (obligation) => {
+        obligationsMap[
+          obligation.obligation_id
+        ] =
+          Number(
+            obligation.compliance_weight
+          ) || 1;
+      }
+    );
+
     let totalWeight = 0;
     let achievedWeight = 0;
-    
-    if (progressData && obligations) {
-      const obligationsMap = {};
-      obligations.forEach(o => {
-        obligationsMap[o.obligation_id] = o.compliance_weight || 1;
-      });
 
-      progressData.forEach(p => {
-        const weight = obligationsMap[p.obligation_id] || 1;
-        totalWeight += weight;
-        if (p.status === 'Closed') {
-          achievedWeight += weight;
-        }
-      });
-    }
+    progressData.forEach((progress) => {
+      const weight =
+        obligationsMap[
+          progress.obligation_id
+        ] || 1;
 
-    const overallWeightedCompliance = totalWeight > 0 
-      ? Number(((achievedWeight / totalWeight) * 100).toFixed(1))
-      : 0;
-    console.log('📊 [DashboardStats] Weighted compliance:', overallWeightedCompliance);
+      totalWeight += weight;
 
-    // ---------------------------------------------------------
-    // 5. CALCULATE EVIDENCE COMPLETION
-    // ---------------------------------------------------------
-    const progressWithEvidence = progressData.filter(p => p.evidence_id !== null);
-    const progressWithEvidenceCount = progressWithEvidence.length;
-    
-    const evidenceCompletion = totalProgressRecords > 0 
-      ? Number(((progressWithEvidenceCount / totalProgressRecords) * 100).toFixed(1))
-      : 0;
-    
-    console.log('📊 [DashboardStats] Evidence completion:', {
-      total: totalProgressRecords,
-      withEvidence: progressWithEvidenceCount,
-      percentage: evidenceCompletion
+      if (progress.status === "Closed") {
+        achievedWeight += weight;
+      }
     });
 
-    // ---------------------------------------------------------
-    // 6. CALCULATE MANDATORY OBLIGATIONS
-    // ---------------------------------------------------------
-    const mandatoryObligations = obligations?.filter(o => o.mandatory === true).length || 0;
-    console.log('📊 [DashboardStats] Mandatory obligations:', mandatoryObligations);
+    const overallWeightedCompliance =
+      totalWeight > 0
+        ? Number(
+            (
+              (achievedWeight /
+                totalWeight) *
+              100
+            ).toFixed(1)
+          )
+        : 0;
 
     // ---------------------------------------------------------
-    // 7. CALCULATE REGIONS BELOW TARGET
+    // 17. EVIDENCE COMPLETION
     // ---------------------------------------------------------
+
+    const progressWithEvidence =
+      progressData.filter(
+        (p) =>
+          p.evidence_id !== null &&
+          p.evidence_id !== undefined
+      ).length;
+
+    const evidenceCompletion =
+      totalProgressRecords > 0
+        ? Number(
+            (
+              (progressWithEvidence /
+                totalProgressRecords) *
+              100
+            ).toFixed(1)
+          )
+        : 0;
+
+    // ---------------------------------------------------------
+    // 18. MANDATORY OBLIGATIONS
+    //
+    // Count only mandatory obligations that actually
+    // exist in this dashboard's progress records.
+    // ---------------------------------------------------------
+
+    const mandatoryObligationIds =
+      new Set(
+        (obligations || [])
+          .filter(
+            (o) => o.mandatory === true
+          )
+          .map(
+            (o) => o.obligation_id
+          )
+      );
+
+    const mandatoryObligations =
+      [
+        ...uniqueObligationIds
+      ].filter(
+        (id) =>
+          mandatoryObligationIds.has(id)
+      ).length;
+
+    // ---------------------------------------------------------
+    // 19. REGION TARGET
+    // ---------------------------------------------------------
+
     let regionsBelowTarget = 0;
     let regionsTotal = 0;
-    
-    // Get all regions
-    const { data: allRegions, error: regionsError } = await supabase
-      .from('regions')
-      .select('id, name');
 
-    if (!regionsError && allRegions) {
-      regionsTotal = allRegions.length;
-      console.log('📊 [DashboardStats] Total regions:', regionsTotal);
-      
-      // For each region, calculate its compliance using data up to today
-      for (const region of allRegions) {
-        const regionProgress = progressData.filter(p => p.region_id === region.id) || [];
-        const regionTotal = regionProgress.length;
-        const regionClosed = regionProgress.filter(p => p.status === 'Closed').length;
-        const regionCompliance = regionTotal > 0 ? (regionClosed / regionTotal) * 100 : 0;
-        
-        console.log(`📊 [DashboardStats] Region ${region.name}:`, {
-          total: regionTotal,
-          closed: regionClosed,
-          compliance: regionCompliance.toFixed(1) + '%',
-          belowTarget: regionCompliance < 80
-        });
-        
-        // If region compliance is below 80%, count as below target
-        if (regionCompliance < 80 && regionTotal > 0) {
-          regionsBelowTarget++;
+    if (isAdmin) {
+      // -------------------------------------------------------
+      // ADMIN
+      // -------------------------------------------------------
+
+      const {
+        data: allRegions,
+        error: regionsError
+      } = await supabase
+        .from("regions")
+        .select("id, name");
+
+      if (!regionsError && allRegions) {
+        regionsTotal =
+          allRegions.length;
+
+        for (const region of allRegions) {
+          const regionProgress =
+            progressData.filter(
+              (p) =>
+                p.region_id ===
+                region.id
+            );
+
+          const regionTotal =
+            regionProgress.length;
+
+          const regionClosed =
+            regionProgress.filter(
+              (p) =>
+                p.status === "Closed"
+            ).length;
+
+          const regionCompliance =
+            regionTotal > 0
+              ? (regionClosed /
+                  regionTotal) *
+                100
+              : 0;
+
+          console.log(
+            `🌍 ${region.name}: ${regionTotal} total | ${regionClosed} closed | ${regionCompliance.toFixed(
+              1
+            )}%`
+          );
+
+          if (
+            regionTotal > 0 &&
+            regionCompliance < 80
+          ) {
+            regionsBelowTarget++;
+          }
+        }
+      }
+    } else {
+      // -------------------------------------------------------
+      // REGIONAL USER
+      // -------------------------------------------------------
+
+      regionsTotal = 1;
+
+      if (
+        totalProgressRecords > 0
+      ) {
+        const regionCompliance =
+          (closedRecords /
+            totalProgressRecords) *
+          100;
+
+        if (
+          regionCompliance < 80
+        ) {
+          regionsBelowTarget = 1;
         }
       }
     }
-    console.log('📊 [DashboardStats] Regions below target:', regionsBelowTarget);
 
     // ---------------------------------------------------------
-    // 8. HIGH-RISK GAPS = Overdue records
+    // 20. HIGH-RISK GAPS
     // ---------------------------------------------------------
-    const highRiskGaps = overdueRecords;
+
+    const highRiskGaps =
+      overdueRecords;
 
     // ---------------------------------------------------------
-    // 9. RETURN ALL STATS
+    // 21. FINAL RESULT
     // ---------------------------------------------------------
+
     const result = {
-      overallCompliance: overallWeightedCompliance || overallCompliance,
-      auditReadiness: auditReadiness,
-      totalObligations: totalUniqueObligations,
+      // Use weighted compliance when available
+      overallCompliance:
+        totalWeight > 0
+          ? overallWeightedCompliance
+          : overallCompliance,
+
+      auditReadiness,
+
+      // Unique obligations
+      totalObligations:
+        totalUniqueObligations,
+
+      // Status counts are occurrences
       completed: closedRecords,
+
       pending: openRecords,
+
       overdue: overdueRecords,
+
       inProgress: submittedRecords,
-      notStarted: notStarted > 0 ? notStarted : 0,
-      highRiskGaps: highRiskGaps,
-      regionsBelowTarget: regionsBelowTarget,
-      regionsTotal: regionsTotal,
-      evidenceCompletion: evidenceCompletion,
-      mandatoryObligations: mandatoryObligations,
-      totalOccurrences: totalProgressRecords,
+
+      notStarted,
+
+      highRiskGaps,
+
+      regionsBelowTarget,
+
+      regionsTotal,
+
+      evidenceCompletion,
+
+      mandatoryObligations,
+
+      // Actual number of progress/occurrence records
+      totalOccurrences:
+        totalProgressRecords
     };
 
-    console.log('✅ [DashboardStats] Final result:', result);
+    // ---------------------------------------------------------
+    // 22. FINAL DEBUG
+    // ---------------------------------------------------------
+
+    console.log(
+      "================================================="
+    );
+
+    console.log(
+      "✅ [DashboardStats] FINAL RESULT"
+    );
+
+    console.log(
+      "Region:",
+      isAdmin
+        ? "ALL REGIONS"
+        : userRegion
+    );
+
+    console.log(
+      "Total:",
+      result.totalOccurrences
+    );
+
+    console.log(
+      "Closed:",
+      result.completed
+    );
+
+    console.log(
+      "Submitted:",
+      result.inProgress
+    );
+
+    console.log(
+      "Open:",
+      result.pending
+    );
+
+    console.log(
+      "Overdue:",
+      result.overdue
+    );
+
+    console.log(
+      "Evidence:",
+      result.evidenceCompletion + "%"
+    );
+
+    console.log(
+      "================================================="
+    );
+
     return result;
 
   } catch (error) {
-    console.error('❌ [DashboardStats] Error:', error);
+    console.error(
+      "❌ [DashboardStats] ERROR:",
+      error
+    );
+
     return {
       overallCompliance: 0,
       auditReadiness: 0,
@@ -1325,7 +1776,7 @@ export const getDashboardStats = async (userRegion = null, isAdmin = false) => {
       regionsTotal: 0,
       evidenceCompletion: 0,
       mandatoryObligations: 0,
-      totalOccurrences: 0,
+      totalOccurrences: 0
     };
   }
 };

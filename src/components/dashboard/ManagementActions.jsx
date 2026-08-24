@@ -26,6 +26,23 @@ const ManagementActions = ({ userRegion, isAdmin }) => {
     }
   };
 
+  const getRegionName = async (regionId) => {
+    if (!regionId) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('name')
+        .eq('id', regionId)
+        .single();
+      
+      if (error) return null;
+      return data?.name || null;
+    } catch (error) {
+      console.error('Error getting region name:', error);
+      return null;
+    }
+  };
+
   const fetchManagementActions = async () => {
     setLoading(true);
     try {
@@ -92,10 +109,19 @@ const ManagementActions = ({ userRegion, isAdmin }) => {
         return;
       }
 
+      // Get region names for all unique region IDs
+      const regionIds = [...new Set(progressData.map(item => item.region_id).filter(id => id))];
+      const regionNameMap = {};
+      
+      for (const id of regionIds) {
+        const name = await getRegionName(id);
+        if (name) {
+          regionNameMap[id] = name;
+        }
+      }
+
       // Filter and categorize obligations
-      const overdueItems = [];
-      const inProgressItems = [];
-      const onTrackItems = [];
+      const actionsList = [];
 
       progressData.forEach(item => {
         const obligation = item.obligation || {};
@@ -136,13 +162,15 @@ const ManagementActions = ({ userRegion, isAdmin }) => {
           }
 
           // Get region name from region_id
-          let regionName = 'Unknown Region';
-          if (item.region_id) {
-            // We'll fetch region names in a separate call or use the region from obligation
-            regionName = obligation.region || 'Unknown Region';
+          let regionName = null;
+          if (item.region_id && regionNameMap[item.region_id]) {
+            regionName = regionNameMap[item.region_id];
           }
 
-          actions.push({
+          // Skip items without a valid region name
+          if (!regionName) return;
+
+          actionsList.push({
             id: item.id,
             action: action,
             region: regionName,
@@ -154,12 +182,13 @@ const ManagementActions = ({ userRegion, isAdmin }) => {
             obligation_name: obligation.obligation_name || 'Unknown',
             evidence_id: item.evidence_id,
             comments: item.comments,
+            region_id: item.region_id,
           });
         }
       });
 
       // Sort: Overdue first, then In Progress
-      actions.sort((a, b) => {
+      actionsList.sort((a, b) => {
         if (a.status === 'Overdue' && b.status !== 'Overdue') return -1;
         if (a.status !== 'Overdue' && b.status === 'Overdue') return 1;
         if (a.status === 'In Progress' && b.status === 'On Track') return -1;
@@ -167,7 +196,7 @@ const ManagementActions = ({ userRegion, isAdmin }) => {
       });
 
       // Limit to 10 items
-      setActions(actions.slice(0, 10));
+      setActions(actionsList.slice(0, 10));
 
     } catch (error) {
       console.error('Error fetching management actions:', error);

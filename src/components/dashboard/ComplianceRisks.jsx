@@ -26,6 +26,23 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
     }
   };
 
+  const getRegionName = async (regionId) => {
+    if (!regionId) return null;
+    try {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('name')
+        .eq('id', regionId)
+        .single();
+      
+      if (error) return null;
+      return data?.name || null;
+    } catch (error) {
+      console.error('Error getting region name:', error);
+      return null;
+    }
+  };
+
   const fetchRisksData = async () => {
     setLoading(true);
     try {
@@ -106,6 +123,17 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
         return;
       }
 
+      // Get region names for all unique region IDs
+      const regionIds = [...new Set(overdueItems.map(item => item.region_id).filter(id => id))];
+      const regionNameMap = {};
+      
+      for (const id of regionIds) {
+        const name = await getRegionName(id);
+        if (name) {
+          regionNameMap[id] = name;
+        }
+      }
+
       // Map to risks data with severity based on compliance_weight
       const risksData = overdueItems
         .map(item => {
@@ -125,11 +153,13 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
           const daysOverdue = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
           // Get region name
-          let regionName = 'Unknown Region';
-          if (item.region_id) {
-            // Try to get from obligation or use a fallback
-            regionName = obligation.region || 'Unknown Region';
+          let regionName = '';
+          if (item.region_id && regionNameMap[item.region_id]) {
+            regionName = regionNameMap[item.region_id];
           }
+
+          // Skip items without a valid region name
+          if (!regionName) return null;
 
           return {
             severity: severity,
@@ -142,8 +172,11 @@ const ComplianceRisks = ({ userRegion, isAdmin }) => {
             compliance_weight: weight,
             domain: obligation.domain || 'N/A',
             evidence_id: item.evidence_id,
+            region_id: item.region_id,
+            region_name: regionName,
           };
         })
+        .filter(risk => risk !== null) // Remove null entries (items without region name)
         // Sort by severity (Critical first) and then by days overdue
         .sort((a, b) => {
           const severityOrder = { 'Critical': 0, 'High': 1, 'Medium': 2, 'Low': 3 };

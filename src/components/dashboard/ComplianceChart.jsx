@@ -35,6 +35,8 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
         regionId = await getRegionId(userRegion);
       }
 
+      console.log('📊 [ComplianceChart] Fetching for:', { userRegion, isAdmin, regionId });
+
       // Fetch all obligations with their domains and compliance weights
       const { data: obligations, error: obligationsError } = await supabase
         .from('compliance_obligations')
@@ -54,7 +56,7 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
       // Fetch progress records for these obligations
       let progressQuery = supabase
         .from('compliance_progress')
-        .select('obligation_id, status')
+        .select('obligation_id, status, region_id, occurrence_date')
         .in('obligation_id', obligationIds);
 
       if (regionId) {
@@ -65,28 +67,54 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
 
       if (progressError) throw progressError;
 
-      // Create a map of obligation_id to status (get the latest status for each)
+      console.log('📊 [ComplianceChart] Progress data:', progressData?.length || 0);
+
+      // Create a map of obligation_id to the latest status
+      // IMPORTANT: For admin, we need to consider ALL regions
+      // For non-admin, only the user's region
       const obligationStatusMap = {};
       
       if (progressData) {
         progressData.forEach(p => {
-          // If multiple records for same obligation, keep the most recent status
-          // or if status is Closed, prioritize it
-          if (!obligationStatusMap[p.obligation_id] || 
-              p.status === 'Closed' || 
-              (p.status === 'Submitted/Under Review' && obligationStatusMap[p.obligation_id] === 'Open')) {
-            obligationStatusMap[p.obligation_id] = p.status;
+          // For each obligation, keep the most recent status
+          // If multiple records, prioritize 'Closed' status
+          const current = obligationStatusMap[p.obligation_id];
+          
+          if (!current) {
+            obligationStatusMap[p.obligation_id] = {
+              status: p.status,
+              date: p.occurrence_date
+            };
+          } else {
+            // If this record is Closed, prioritize it
+            if (p.status === 'Closed') {
+              obligationStatusMap[p.obligation_id] = {
+                status: p.status,
+                date: p.occurrence_date
+              };
+            } 
+            // If current is not Closed and this record is more recent
+            else if (current.status !== 'Closed' && 
+                     new Date(p.occurrence_date) > new Date(current.date)) {
+              obligationStatusMap[p.obligation_id] = {
+                status: p.status,
+                date: p.occurrence_date
+              };
+            }
           }
         });
       }
+
+      console.log('📊 [ComplianceChart] Status map:', obligationStatusMap);
 
       // Calculate compliance by domain
       const domainMap = {};
 
       obligations.forEach(obligation => {
         const domain = obligation.domain || 'Uncategorized';
-        const weight = obligation.compliance_weight || 1;
-        const status = obligationStatusMap[obligation.obligation_id] || 'Open';
+        const weight = Number(obligation.compliance_weight) || 1;
+        const statusData = obligationStatusMap[obligation.obligation_id];
+        const status = statusData?.status || 'Open';
         const isClosed = status === 'Closed';
 
         if (!domainMap[domain]) {
@@ -107,6 +135,8 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
         }
       });
 
+      console.log('📊 [ComplianceChart] Domain map:', domainMap);
+
       // Calculate compliance percentage for each domain
       const domains = [];
       const compliance = [];
@@ -114,9 +144,11 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
       for (const [domain, data] of Object.entries(domainMap)) {
         domains.push(domain);
         const percentage = data.totalWeight > 0 
-          ? Math.round((data.achievedWeight / data.totalWeight) * 100) 
+          ? parseFloat(((data.achievedWeight / data.totalWeight) * 100).toFixed(1))
           : 0;
         compliance.push(percentage);
+        
+        console.log(`📊 [ComplianceChart] ${domain}: ${data.closedObligations}/${data.totalObligations} closed = ${percentage}%`);
       }
 
       // Sort by compliance percentage (highest first)
@@ -195,9 +227,9 @@ const ComplianceChart = ({ userRegion, isAdmin }) => {
       // Calculate weighted average if we have weight data
       let average;
       if (value.totalWeight > 0) {
-        average = Math.round((value.achievedWeight / value.totalWeight) * 100);
+        average = parseFloat(((value.achievedWeight / value.totalWeight) * 100).toFixed(1));
       } else {
-        average = Math.round(value.totalValue / value.count);
+        average = parseFloat((value.totalValue / value.count).toFixed(1));
       }
       consolidatedCompliance.push(average);
     }
