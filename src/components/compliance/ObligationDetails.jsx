@@ -30,6 +30,8 @@ const ObligationDetails = () => {
   const [occurrences, setOccurrences] = useState([]);
   const [pendingApproval, setPendingApproval] = useState(null);
   const [progressRecords, setProgressRecords] = useState([]);
+  const [deletingEvidence, setDeletingEvidence] = useState(null);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   // Message state for center display
   const [message, setMessage] = useState({ text: "", type: "", visible: false });
@@ -216,21 +218,22 @@ const ObligationDetails = () => {
 
       setObligation(obligationData);
 
-      // Fetch evidence
+      // Fetch evidence using the text obligation_id (not UUID)
       let evidenceQuery = supabase
         .from('evidence')
         .select(`
           *,
-          progress:compliance_progress(
+          progress:compliance_progress!evidence_occurrence_id_fkey(
             id,
             occurrence_date,
             status,
             region:regions(id, name, code)
           )
         `)
-        .eq('obligation_id', obligationData.obligation_id)
+        .eq('obligation_id', obligationData.obligation_id) // Use text obligation_id
         .order('uploaded_at', { ascending: false });
 
+      // Filter by region for non-admin users
       if (!isAdmin && userRegion) {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
@@ -241,6 +244,9 @@ const ObligationDetails = () => {
       const { data: evidenceData, error: evidenceError } = await evidenceQuery;
       if (!evidenceError) {
         setEvidence(evidenceData || []);
+        console.log(`✅ Evidence loaded: ${evidenceData?.length || 0} records`);
+      } else {
+        console.error('Error fetching evidence:', evidenceError);
       }
 
       // Fetch activity history
@@ -376,11 +382,99 @@ const ObligationDetails = () => {
     }
   };
 
+  // Handle evidence deletion
+  const handleEvidenceDelete = async (evidenceItem) => {
+    if (!evidenceItem) return;
+    
+    // Check if user has permission to delete
+    const canDelete = isAdmin || (userRegion && evidenceItem.region_id);
+    
+    if (!canDelete) {
+      showMessage("You don't have permission to delete this evidence.", "error");
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to delete "${evidenceItem.file_name}"? This action cannot be undone.`)) return;
+
+    setDeleteLoading(true);
+    setDeletingEvidence(evidenceItem.id);
+
+    try {
+      // Extract file path from URL
+      const filePath = evidenceItem.file_url.split('/').pop();
+      const storagePath = `evidence/${obligation.obligation_id}/${evidenceItem.occurrence_id}/${filePath}`;
+
+      // Delete from storage
+      const { error: storageError } = await supabase.storage
+        .from('obligation_evidence')
+        .remove([storagePath]);
+
+      if (storageError) {
+        console.error('Error deleting file from storage:', storageError);
+        // Continue with database deletion even if storage fails
+      }
+
+      // Delete from evidence table
+      const { error: dbError } = await supabase
+        .from('evidence')
+        .delete()
+        .eq('id', evidenceItem.id);
+
+      if (dbError) throw dbError;
+
+      // Update progress record to remove evidence reference and reset status
+      if (evidenceItem.occurrence_id) {
+        const { error: progressError } = await supabase
+          .from('compliance_progress')
+          .update({
+            evidence_id: null,
+            status: 'Open',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', evidenceItem.occurrence_id);
+
+        if (progressError) {
+          console.error('Error updating progress:', progressError);
+        }
+      }
+
+      // Add activity
+      await supabase.from("activity_history").insert({
+        obligation_id: obligation.id,
+        action: `Evidence "${evidenceItem.file_name}" deleted`,
+        user_id: profile?.id || null,
+        user_name: profile?.full_name || "System",
+        details: { comment: `Evidence deleted by ${profile?.full_name || 'System'}` },
+        created_at: new Date().toISOString()
+      });
+
+      showMessage(`Evidence "${evidenceItem.file_name}" deleted successfully!`, "success");
+      
+      // Refresh data
+      await Promise.all([
+        fetchObligationDetails(),
+        fetchRegionProgress(),
+        fetchOccurrences(),
+        checkPendingApproval(),
+        fetchProgressRecords()
+      ]);
+
+    } catch (error) {
+      console.error('Error deleting evidence:', error);
+      showMessage(`Failed to delete evidence: ${error.message}`, "error");
+    } finally {
+      setDeleteLoading(false);
+      setDeletingEvidence(null);
+    }
+  };
+
   const getStatusBadge = (status) => {
     const badges = {
       'Open': "bg-gray-100 text-gray-800",
       'Submitted/Under Review': "bg-yellow-100 text-yellow-800",
       'Closed': "bg-green-100 text-green-800",
+      'Pending': "bg-blue-100 text-blue-800",
+      'Rejected': "bg-red-100 text-red-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
   };
@@ -390,6 +484,8 @@ const ObligationDetails = () => {
       "Open": "gray",
       "Submitted/Under Review": "yellow",
       "Closed": "green",
+      "Pending": "blue",
+      "Rejected": "red",
     };
     return colors[status] || "gray";
   };
@@ -729,7 +825,7 @@ const ObligationDetails = () => {
 
       // Upload the file
       const fileName = `${Date.now()}_${selectedFile.name}`;
-      const filePath = `evidence/${obligation.id}/${progressId}/${fileName}`;
+      const filePath = `evidence/${obligation.obligation_id}/${progressId}/${fileName}`;
 
       const { error: uploadError } = await supabase.storage
         .from('obligation_evidence')
@@ -741,11 +837,11 @@ const ObligationDetails = () => {
         .from('obligation_evidence')
         .getPublicUrl(filePath);
 
-      // Save evidence record
+      // Save evidence record with text obligation_id
       const { data: evidenceData, error: evidenceError } = await supabase
         .from('evidence')
         .insert({
-          obligation_id: obligation.obligation_id,
+          obligation_id: obligation.obligation_id, // Use text obligation_id
           occurrence_id: progressId,
           region_id: regionId,
           file_name: selectedFile.name,
@@ -832,6 +928,14 @@ const ObligationDetails = () => {
         created_at: new Date().toISOString()
       });
 
+      // Update evidence status
+      if (pendingApproval.evidence_id) {
+        await supabase
+          .from('evidence')
+          .update({ status: 'Closed' })
+          .eq('id', pendingApproval.evidence_id);
+      }
+
       showMessage('Occurrence approved and closed successfully!', "success");
       setComment('');
       await Promise.all([
@@ -870,6 +974,14 @@ const ObligationDetails = () => {
         details: { comment: comment || "Rejected by admin" },
         created_at: new Date().toISOString()
       });
+
+      // Update evidence status
+      if (pendingApproval.evidence_id) {
+        await supabase
+          .from('evidence')
+          .update({ status: 'Rejected' })
+          .eq('id', pendingApproval.evidence_id);
+      }
 
       showMessage('Occurrence rejected successfully!', "success");
       setComment('');
@@ -1132,16 +1244,7 @@ const ObligationDetails = () => {
                   {obligation.due_date_rule || "N/A"}
                 </dd>
               </div>
-              <div>
-                <dt className="text-xs sm:text-sm font-medium text-gray-500">Status</dt>
-                <dd className="mt-1">
-                  <span
-                    className={`px-2 py-1 text-[10px] sm:text-xs font-medium rounded-full ${getStatusBadge(obligation.current_status)}`}
-                  >
-                    {obligation.current_status || "N/A"}
-                  </span>
-                </dd>
-              </div>
+             
               <div>
                 <dt className="text-xs sm:text-sm font-medium text-gray-500">
                   Compliance Weight
@@ -1196,18 +1299,11 @@ const ObligationDetails = () => {
                   {obligation.mandatory ? "Yes" : "No"}
                 </dd>
               </div>
-              <div>
-                <dt className="text-xs sm:text-sm font-medium text-gray-500">Region</dt>
-                <dd className="mt-1 text-xs sm:text-sm text-gray-900 break-all">
-                  {obligation.region || "N/A"}
-                </dd>
-              </div>
+              
             </dl>
           </div>
 
-          
-
-          <div className="bg-white rounded-lg shadow p-4 sm:p-6">
+          {/* <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Update Status {!isAdmin && userRegion && `(Region: ${userRegion})`}
             </h3>
@@ -1236,7 +1332,7 @@ const ObligationDetails = () => {
                 {regionProgress.occurrence_date && ` • Occurrence: ${formatDate(regionProgress.occurrence_date)}`}
               </p>
             )}
-          </div>
+          </div> */}
 
           {/* Admin Approval Actions */}
           {isAdmin && pendingApproval && (
@@ -1340,14 +1436,13 @@ const ObligationDetails = () => {
               </button>
             </div>
           </div>
-
-          
         </div>
 
         <div className="space-y-4 sm:space-y-6">
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Evidence
+             
             </h3>
             <div className="space-y-4">
               <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-6 text-center">
@@ -1431,61 +1526,150 @@ const ObligationDetails = () => {
                 )}
               </div>
 
-              {evidence.map((item) => (
-                <div key={item.id} className="bg-gray-50 p-3 rounded-lg">
-                  <div className="flex flex-col sm:flex-row justify-between items-start gap-2 sm:gap-0">
-                    <div className="flex-1 min-w-0 w-full">
-                      <p className="text-xs sm:text-sm font-medium text-gray-900 break-words">
-                        {item.file_name}
-                      </p>
-                      <p className="text-[10px] sm:text-xs text-gray-500">
-                        Uploaded: {formatDateTime(item.uploaded_at)}
-                      </p>
-                      <span
-                        className={`inline-block px-1.5 py-0.5 text-[10px] rounded-full ${getStatusBadge(item.status)}`}
-                      >
-                        {item.status}
-                      </span>
-                      {item.region_id && (
-                        <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800">
-                          Region
-                        </span>
-                      )}
-                      {item.occurrence_id && (
-                        <span className="ml-1 inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-blue-100 text-blue-800">
-                          Progress
-                        </span>
-                      )}
-                    </div>
-                    {item.file_url && (
-                      <a
-                        href={item.file_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:text-blue-900 flex-shrink-0"
-                      >
-                        <svg
-                          className="h-5 w-5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth="2"
-                            d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                          />
-                        </svg>
-                      </a>
-                    )}
-                  </div>
+              {/* Display uploaded evidence with delete button */}
+              {evidence.length > 0 ? (
+                <>
+                 <h4 className="text-sm font-semibold text-green-500 mb-2">
+      Uploaded Evidence
+    </h4>
+                <div className="space-y-2 max-h-60 overflow-y-auto">
+                  {evidence.map((item) => {
+                    // Check if user can delete this evidence
+                    const canDelete = isAdmin || (userRegion && item.region_id);
+                    const isDeleting = deletingEvidence === item.id;
+                    
+                    return (
+                      <div key={item.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
+                        <div className="flex flex-col sm:flex-row justify-between items-start gap-2 sm:gap-0">
+                          <div className="flex-1 min-w-0 w-full">
+                            <div className="flex items-center flex-wrap gap-1">
+                              <p className="text-xs sm:text-sm font-medium text-gray-900 break-words">
+                                {item.file_name}
+                              </p>
+                              
+                            </div>
+                            <p className="text-[10px] sm:text-xs text-gray-500">
+                              Uploaded: {formatDateTime(item.uploaded_at)}
+                              {item.file_size && ` • Size: ${formatFileSize(item.file_size)}`}
+                            </p>
+                            {item.file_type && (
+                              <p className="text-[10px] text-gray-400">
+                                Type: {item.file_type}
+                              </p>
+                            )}
+                            {item.progress && (
+                              <div className="flex items-center flex-wrap gap-2 mt-1">
+                                <span className="text-[10px] text-gray-500">
+                                  Occurrence: {formatDate(item.progress.occurrence_date)}
+                                </span>
+                               
+                              </div>
+                            )}
+                            {!isAdmin && item.region_id && (
+                              <span className="inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800 mt-1">
+                                Region Uploaded
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-1 flex-shrink-0">
+                            {item.file_url && (
+                              <a
+                                href={item.file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-blue-600 hover:text-blue-900 p-1 hover:bg-blue-50 rounded transition-colors"
+                                title="Download evidence"
+                              >
+                                <svg
+                                  className="h-5 w-5"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  viewBox="0 0 24 24"
+                                >
+                                  <path
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    strokeWidth="2"
+                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                                  />
+                                </svg>
+                              </a>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => handleEvidenceDelete(item)}
+                                disabled={isDeleting}
+                                className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                                title="Delete evidence"
+                              >
+                                {isDeleting ? (
+                                  <svg
+                                    className="animate-spin h-5 w-5"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <circle
+                                      className="opacity-25"
+                                      cx="12"
+                                      cy="12"
+                                      r="10"
+                                      stroke="currentColor"
+                                      strokeWidth="4"
+                                    ></circle>
+                                    <path
+                                      className="opacity-75"
+                                      fill="currentColor"
+                                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                    ></path>
+                                  </svg>
+                                ) : (
+                                  <svg
+                                    className="h-5 w-5"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    viewBox="0 0 24 24"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      strokeWidth="2"
+                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                    />
+                                  </svg>
+                                )}
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-              {evidence.length === 0 && (
-                <p className="text-xs sm:text-sm text-gray-500 text-center py-2">
-                  No evidence uploaded yet
-                </p>
+                </>
+                
+              ) : (
+                <div className="text-center py-6 bg-gray-50 rounded-lg">
+                  <svg
+                    className="h-10 w-10 text-gray-300 mx-auto"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  <p className="text-xs sm:text-sm text-gray-500 mt-2">
+                    No evidence uploaded yet
+                  </p>
+                  <p className="text-[10px] text-gray-400">
+                    Upload evidence using the form above
+                  </p>
+                </div>
               )}
             </div>
           </div>

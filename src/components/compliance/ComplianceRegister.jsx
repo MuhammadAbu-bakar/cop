@@ -22,11 +22,13 @@ const ComplianceRegister = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterDomain, setFilterDomain] = useState("all");
+  const [filterRegion, setFilterRegion] = useState("all");
   const [filterMonth, setFilterMonth] = useState("");
   const [hoveredObligation, setHoveredObligation] = useState(null);
   const [activeTab, setActiveTab] = useState("todo");
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const searchTimeoutRef = useRef(null);
+  const [regions, setRegions] = useState([]);
 
   // Event tab filters
   const [eventSearchTerm, setEventSearchTerm] = useState("");
@@ -143,9 +145,11 @@ const ComplianceRegister = () => {
     const params = new URLSearchParams(location.search);
     const statusParam = params.get('status');
     const monthParam = params.get('month');
+    const regionParam = params.get('region');
     
     if (statusParam) setFilterStatus(statusParam);
     if (monthParam) setFilterMonth(monthParam);
+    if (regionParam) setFilterRegion(regionParam);
   }, [location.search]);
 
   // Initial fetch
@@ -154,6 +158,7 @@ const ComplianceRegister = () => {
     fetchPolicies();
     fetchObligationNameOptions();
     fetchAllEventObligations();
+    fetchRegions();
   }, []);
 
   // Debounce search term to avoid excessive API calls
@@ -180,7 +185,7 @@ const ComplianceRegister = () => {
       // Only fetch if other filters changed
       fetchObligations();
     }
-  }, [filterStatus, filterDomain, filterMonth, activeTab]);
+  }, [filterStatus, filterDomain, filterRegion, filterMonth, activeTab]);
 
   // Fetch when debounced search term changes
   useEffect(() => {
@@ -223,6 +228,17 @@ const ComplianceRegister = () => {
     } catch (error) {
       console.error('Error getting region ID:', error);
       return null;
+    }
+  };
+
+  const fetchRegions = async () => {
+    try {
+      const result = await getRegions();
+      if (result.data) {
+        setRegions(result.data);
+      }
+    } catch (error) {
+      console.error("Error fetching regions:", error);
     }
   };
 
@@ -287,6 +303,8 @@ const ComplianceRegister = () => {
           console.log('📅 Sample obligation occurrence_date:', result.data[0].occurrence_date);
           console.log('📅 Sample obligation frequency:', result.data[0].frequency);
           console.log('📅 Sample obligation current_status:', result.data[0].current_status);
+          console.log('📅 Sample obligation region:', result.data[0].region);
+          console.log('📅 Sample obligation region_id:', result.data[0].region_id);
         }
         
         setObligations(result.data || []);
@@ -902,6 +920,7 @@ const ComplianceRegister = () => {
     setDebouncedSearchTerm("");
     setFilterStatus("all");
     setFilterDomain("all");
+    setFilterRegion("all");
     setFilterMonth("");
     setSortField(null);
     setSortDirection('asc');
@@ -953,6 +972,7 @@ const ComplianceRegister = () => {
       activeTab,
       filterStatus,
       filterDomain,
+      filterRegion,
       filterMonth,
       searchTerm: debouncedSearchTerm,
       totalObligations: obligations.length
@@ -1009,6 +1029,60 @@ const ComplianceRegister = () => {
       filtered = filtered.filter((item) => {
         return item.domain === filterDomain;
       });
+    }
+
+    // Apply region filter (admin only)
+    if (isAdmin && filterRegion && filterRegion !== 'all') {
+      const selectedRegion = regions.find(r => r.name === filterRegion);
+      console.log('🔍 Filtering by region:', filterRegion, 'Selected region object:', selectedRegion);
+      
+      filtered = filtered.filter((item) => {
+        // Check 1: Direct region field match
+        if (item.region && item.region === filterRegion) {
+          console.log('✅ Matched by region field:', item.obligation_id);
+          return true;
+        }
+        
+        // Check 2: region_id match
+        if (selectedRegion && item.region_id === selectedRegion.id) {
+          console.log('✅ Matched by region_id:', item.obligation_id);
+          return true;
+        }
+        
+        // Check 3: Check progress records for region match
+        if (item.progressRecords && Array.isArray(item.progressRecords) && item.progressRecords.length > 0) {
+          const hasMatchingProgress = item.progressRecords.some(progress => {
+            // Check progress.region.name
+            if (progress.region && progress.region.name === filterRegion) {
+              return true;
+            }
+            // Check progress.region_id
+            if (selectedRegion && progress.region_id === selectedRegion.id) {
+              return true;
+            }
+            return false;
+          });
+          if (hasMatchingProgress) {
+            console.log('✅ Matched by progress records:', item.obligation_id);
+            return true;
+          }
+        }
+        
+        // Check 4: Check latestProgress
+        if (item.latestProgress) {
+          if (item.latestProgress.region && item.latestProgress.region.name === filterRegion) {
+            console.log('✅ Matched by latestProgress region:', item.obligation_id);
+            return true;
+          }
+          if (selectedRegion && item.latestProgress.region_id === selectedRegion.id) {
+            console.log('✅ Matched by latestProgress region_id:', item.obligation_id);
+            return true;
+          }
+        }
+        
+        return false;
+      });
+      console.log(`📊 Filtered by region: ${filterRegion}, ${filtered.length} remaining`);
     }
 
     // Apply month filter
@@ -1086,6 +1160,9 @@ const ComplianceRegister = () => {
     }
     if (filterMonth) {
       params.set('month', filterMonth);
+    }
+    if (isAdmin && filterRegion && filterRegion !== 'all') {
+      params.set('region', filterRegion);
     }
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
   };
@@ -1347,6 +1424,22 @@ const ComplianceRegister = () => {
                 </button>
               </span>
             )}
+            {isAdmin && filterRegion !== "all" && activeTab === "todo" && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                  Region: {filterRegion}
+                </span>
+                <button
+                  onClick={() => {
+                    setFilterRegion("all");
+                    updateUrlParams();
+                  }}
+                  className="ml-1 text-xs text-gray-500 hover:text-gray-700"
+                >
+                  ✕
+                </button>
+              </span>
+            )}
             {sortField && activeTab === "todo" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
@@ -1496,10 +1589,10 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* Filters - Only show for To Do tab - ALWAYS SHOW */}
+      {/* Filters - Only show for To Do tab */}
       {activeTab === "todo" && (
         <div className="bg-white rounded-lg shadow p-3">
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-2 sm:gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 sm:gap-3">
             <div>
               <input
                 type="text"
@@ -1554,6 +1647,26 @@ const ComplianceRegister = () => {
                 ))}
               </select>
             </div>
+            {/* Region Filter - Admin Only */}
+            {isAdmin && (
+              <div>
+                <select
+                  value={filterRegion}
+                  onChange={(e) => {
+                    setFilterRegion(e.target.value);
+                    updateUrlParams();
+                  }}
+                  className="w-full px-2 py-1.5 text-xs sm:text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-[#8cc63e]"
+                >
+                  <option value="all">All Regions</option>
+                  {regions.map((region) => (
+                    <option key={region.id} value={region.name}>
+                      {region.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="mt-2 flex justify-end">
             <button
@@ -1663,7 +1776,7 @@ const ComplianceRegister = () => {
         </div>
       )}
 
-      {/* To Do Tab - NO VERTICAL SCROLLING */}
+      {/* To Do Tab */}
       {activeTab === "todo" && (
         <div className="bg-white rounded-lg shadow overflow-hidden">
           <div className="overflow-x-auto">
@@ -1877,7 +1990,6 @@ const ComplianceRegister = () => {
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                {/* ... rest of the add modal content remains the same ... */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation ID *
@@ -2323,7 +2435,6 @@ const ComplianceRegister = () => {
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
-                {/* ... edit modal content remains the same ... */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Obligation Name *
