@@ -16,7 +16,7 @@ import Reports from "./components/reports/Reports";
 import AdminPanel from "./components/admin/AdminPanel";
 import Policies from "./components/policies/Policies";
 import AuditHistory from "./components/audit/AuditHistory";
-import Approvals from "./components/approvals/Approvals"; // Import Approvals component
+import Approvals from "./components/approvals/Approvals";
 
 import { ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
@@ -37,7 +37,7 @@ function App() {
           draggable
           pauseOnHover
           theme="light"
-          limit={5} // Limit number of toasts shown at once
+          limit={5}
         />
         
         <Routes>
@@ -62,11 +62,11 @@ function App() {
             <Route path="policies" element={<Policies />} />
             <Route path="audit-history" element={<AuditHistory />} />
             
-            {/* Approvals Route - Admin only */}
+            {/* Approvals Route - Admin and Regional Manager can access */}
             <Route
               path="approvals"
               element={
-                <ProtectedRoute requiredRoles={["admin"]}>
+                <ProtectedRoute requiredRoles={["admin", "regional_manager"]}>
                   <Approvals />
                 </ProtectedRoute>
               }

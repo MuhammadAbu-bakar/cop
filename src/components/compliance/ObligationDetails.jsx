@@ -2,14 +2,40 @@ import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../api/supabase";
+import { 
+  isAdmin, 
+  isRegionalManager, 
+  isRegionalUser,
+  canApproveAtLevel,
+  canRejectAtLevel
+} from "../../api/auth";
+import {
+  managerApprove,
+  managerReject,
+  adminFinalApprove,
+  adminReject,
+  getApprovalHistory,
+  submitForRegionalApproval
+} from "../../api/compliance";
 
 const ObligationDetails = () => {
   const { id } = useParams();
   const obligationId = id;
   const navigate = useNavigate();
   const { profile } = useAuth();
-  const isAdmin = profile?.role === "admin";
+  
+  // Role-based permissions
+  const isAdminUser = isAdmin(profile);
+  const isManager = isRegionalManager(profile);
+  const isRegionalUserRole = isRegionalUser(profile);
+  const userRole = profile?.role || "regional_user";
   const userRegion = profile?.region_name || null;
+  
+  // Permission flags
+  const canUploadEvidence = isRegionalUserRole || isManager || isAdminUser;
+  const canApprove = isAdminUser || isManager;
+  const canDeleteEvidence = isAdminUser || (isManager && userRegion);
+  
   const fileInputRef = useRef(null);
   const templateFileInputRef = useRef(null);
 
@@ -29,9 +55,14 @@ const ObligationDetails = () => {
   const [regionProgress, setRegionProgress] = useState(null);
   const [occurrences, setOccurrences] = useState([]);
   const [pendingApproval, setPendingApproval] = useState(null);
+  const [pendingManagerApproval, setPendingManagerApproval] = useState(null);
+  const [pendingAdminApproval, setPendingAdminApproval] = useState(null);
   const [progressRecords, setProgressRecords] = useState([]);
   const [deletingEvidence, setDeletingEvidence] = useState(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const [approvalHistory, setApprovalHistory] = useState(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [processingId, setProcessingId] = useState(null);
 
   // Message state for center display
   const [message, setMessage] = useState({ text: "", type: "", visible: false });
@@ -58,7 +89,7 @@ const ObligationDetails = () => {
       fetchTemplates();
       fetchRegionProgress();
       fetchOccurrences();
-      checkPendingApproval();
+      checkPendingApprovals();
       fetchProgressRecords();
     }
   }, [obligation]);
@@ -84,7 +115,7 @@ const ObligationDetails = () => {
   };
 
   const fetchRegionProgress = async () => {
-    if (!obligation || !userRegion || isAdmin) return;
+    if (!obligation || !userRegion || isAdminUser) return;
 
     try {
       const regionId = await getRegionId(userRegion);
@@ -118,7 +149,7 @@ const ObligationDetails = () => {
         .eq('obligation_id', obligation.obligation_id)
         .order('occurrence_date', { ascending: false });
 
-      if (!isAdmin && userRegion) {
+      if (!isAdminUser && userRegion) {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
           query = query.eq('region_id', regionId);
@@ -134,7 +165,7 @@ const ObligationDetails = () => {
   };
 
   const fetchOccurrences = async () => {
-    if (!obligation || !userRegion || isAdmin) return;
+    if (!obligation || !userRegion || isAdminUser) return;
 
     try {
       const regionId = await getRegionId(userRegion);
@@ -162,11 +193,12 @@ const ObligationDetails = () => {
     }
   };
 
-  const checkPendingApproval = async () => {
-    if (!obligation || !isAdmin) return;
+  const checkPendingApprovals = async () => {
+    if (!obligation) return;
 
     try {
-      const { data, error } = await supabase
+      // Check for manager pending approvals (regional level)
+      let managerQuery = supabase
         .from('compliance_progress')
         .select(`
           *,
@@ -183,13 +215,74 @@ const ObligationDetails = () => {
         `)
         .eq('obligation_id', obligation.obligation_id)
         .eq('status', 'Submitted/Under Review')
+        .eq('approval_level', 'regional')
         .order('updated_at', { ascending: false })
         .limit(1);
 
-      if (error) throw error;
-      setPendingApproval(data?.[0] || null);
+      // Check for admin pending approvals (manager level)
+      let adminQuery = supabase
+        .from('compliance_progress')
+        .select(`
+          *,
+          evidence:evidence!left(
+            id,
+            file_name,
+            file_url,
+            file_type,
+            file_size,
+            uploaded_at,
+            uploaded_by
+          ),
+          region:regions(id, name, code),
+          manager:profiles!compliance_progress_manager_approved_by_fkey(
+            id,
+            full_name,
+            email
+          )
+        `)
+        .eq('obligation_id', obligation.obligation_id)
+        .eq('status', 'Submitted/Under Review')
+        .eq('approval_level', 'manager')
+        .order('updated_at', { ascending: false })
+        .limit(1);
+
+      // Apply region filters based on role
+      if (!isAdminUser && userRegion) {
+        const regionId = await getRegionId(userRegion);
+        if (regionId) {
+          managerQuery = managerQuery.eq('region_id', regionId);
+          adminQuery = adminQuery.eq('region_id', regionId);
+        }
+      }
+
+      const [managerResult, adminResult] = await Promise.all([
+        managerQuery,
+        adminQuery
+      ]);
+
+      if (managerResult.error) throw managerResult.error;
+      if (adminResult.error) throw adminResult.error;
+
+      setPendingManagerApproval(managerResult.data?.[0] || null);
+      setPendingAdminApproval(adminResult.data?.[0] || null);
+      
+      // Set pendingApproval for backward compatibility
+      if (isAdminUser && adminResult.data?.[0]) {
+        setPendingApproval(adminResult.data[0]);
+      } else if (isManager && managerResult.data?.[0]) {
+        setPendingApproval(managerResult.data[0]);
+      } else {
+        setPendingApproval(managerResult.data?.[0] || adminResult.data?.[0] || null);
+      }
+
+      console.log('📊 Pending approvals:', {
+        manager: managerResult.data?.[0]?.id || null,
+        admin: adminResult.data?.[0]?.id || null,
+        role: userRole
+      });
+
     } catch (error) {
-      console.error('Error checking pending approval:', error);
+      console.error('Error checking pending approvals:', error);
     }
   };
 
@@ -227,14 +320,15 @@ const ObligationDetails = () => {
             id,
             occurrence_date,
             status,
+            approval_level,
             region:regions(id, name, code)
           )
         `)
-        .eq('obligation_id', obligationData.obligation_id) // Use text obligation_id
+        .eq('obligation_id', obligationData.obligation_id)
         .order('uploaded_at', { ascending: false });
 
       // Filter by region for non-admin users
-      if (!isAdmin && userRegion) {
+      if (!isAdminUser && userRegion) {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
           evidenceQuery = evidenceQuery.eq('region_id', regionId);
@@ -387,7 +481,7 @@ const ObligationDetails = () => {
     if (!evidenceItem) return;
     
     // Check if user has permission to delete
-    const canDelete = isAdmin || (userRegion && evidenceItem.region_id);
+    const canDelete = isAdminUser || (canDeleteEvidence && evidenceItem.region_id);
     
     if (!canDelete) {
       showMessage("You don't have permission to delete this evidence.", "error");
@@ -429,6 +523,7 @@ const ObligationDetails = () => {
           .update({
             evidence_id: null,
             status: 'Open',
+            approval_level: 'regional',
             updated_at: new Date().toISOString()
           })
           .eq('id', evidenceItem.occurrence_id);
@@ -455,7 +550,7 @@ const ObligationDetails = () => {
         fetchObligationDetails(),
         fetchRegionProgress(),
         fetchOccurrences(),
-        checkPendingApproval(),
+        checkPendingApprovals(),
         fetchProgressRecords()
       ]);
 
@@ -477,6 +572,24 @@ const ObligationDetails = () => {
       'Rejected': "bg-red-100 text-red-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
+  };
+
+  const getApprovalLevelBadge = (level) => {
+    const badges = {
+      'regional': 'bg-yellow-100 text-yellow-800',
+      'manager': 'bg-blue-100 text-blue-800',
+      'admin': 'bg-green-100 text-green-800',
+    };
+    return badges[level] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getApprovalLevelLabel = (level) => {
+    const labels = {
+      'regional': '⏳ Regional Manager Review',
+      'manager': '⏳ Admin Review',
+      'admin': '✅ Final Approved'
+    };
+    return labels[level] || level;
   };
 
   const getStatusColor = (status) => {
@@ -506,7 +619,7 @@ const ObligationDetails = () => {
   const handleStatusUpdate = async (newStatus) => {
     if (!obligation) return;
 
-    if (!isAdmin && userRegion) {
+    if (!isAdminUser && userRegion) {
       const regionId = await getRegionId(userRegion);
       if (!regionId) {
         showMessage("Region not found for user.", "error");
@@ -514,11 +627,10 @@ const ObligationDetails = () => {
       }
 
       try {
-        // Find the current progress record or create one
         let progressId = null;
         const { data: existingProgress, error: findError } = await supabase
           .from('compliance_progress')
-          .select('id, status, occurrence_date')
+          .select('id, status, occurrence_date, approval_level')
           .eq('obligation_id', obligation.obligation_id)
           .eq('region_id', regionId)
           .order('occurrence_date', { ascending: false })
@@ -534,6 +646,10 @@ const ObligationDetails = () => {
             updated_at: new Date().toISOString()
           };
 
+          if (newStatus === 'Submitted/Under Review') {
+            updateData.approval_level = 'regional';
+          }
+
           if (comment) {
             updateData.comments = comment;
           }
@@ -545,22 +661,27 @@ const ObligationDetails = () => {
 
           if (updateError) throw updateError;
         } else {
-          // Create new progress record
           const currentDate = new Date();
           const dueDate = obligation.calculated_due_date || 
             new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
+          const insertData = {
+            obligation_id: obligation.obligation_id,
+            region_id: regionId,
+            occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
+            status: newStatus,
+            comments: comment || null,
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+
+          if (newStatus === 'Submitted/Under Review') {
+            insertData.approval_level = 'regional';
+          }
+
           const { error: insertError } = await supabase
             .from('compliance_progress')
-            .insert({
-              obligation_id: obligation.obligation_id,
-              region_id: regionId,
-              occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
-              status: newStatus,
-              comments: comment || null,
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            });
+            .insert(insertData);
 
           if (insertError) throw insertError;
         }
@@ -569,7 +690,8 @@ const ObligationDetails = () => {
           fetchRegionProgress(),
           fetchObligationDetails(),
           fetchProgressRecords(),
-          fetchOccurrences()
+          fetchOccurrences(),
+          checkPendingApprovals()
         ]);
 
         showMessage(`Status updated to "${newStatus}" for region ${userRegion}`, "success");
@@ -599,6 +721,7 @@ const ObligationDetails = () => {
           .from("compliance_progress")
           .update({
             status: "Closed",
+            approval_level: "admin",
             updated_at: new Date().toISOString()
           })
           .eq("obligation_id", obligation.obligation_id)
@@ -762,12 +885,12 @@ const ObligationDetails = () => {
     setUploadError("");
 
     try {
-      if (!isAdmin && !userRegion) {
+      if (!isAdminUser && !userRegion) {
         throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
       }
 
       const regionId = await getRegionId(userRegion);
-      if (!regionId && !isAdmin) {
+      if (!regionId && !isAdminUser) {
         throw new Error('Region not found for user.');
       }
 
@@ -778,7 +901,7 @@ const ObligationDetails = () => {
       let progressId = null;
       
       // Find or create progress record for this obligation in the current month
-      if (!isAdmin && regionId) {
+      if (!isAdminUser && regionId) {
         const startDate = new Date(year, month, 1).toISOString().split('T')[0];
         const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
 
@@ -796,7 +919,6 @@ const ObligationDetails = () => {
         if (existingProgress && existingProgress.length > 0) {
           progressId = existingProgress[0].id;
         } else {
-          // Create new progress record
           const dueDate = obligation.calculated_due_date || 
             new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
 
@@ -807,6 +929,7 @@ const ObligationDetails = () => {
               region_id: regionId,
               occurrence_date: new Date(year, month, 1).toISOString().split('T')[0],
               status: 'Open',
+              approval_level: 'regional',
               created_at: new Date().toISOString(),
               updated_at: new Date().toISOString()
             })
@@ -841,7 +964,7 @@ const ObligationDetails = () => {
       const { data: evidenceData, error: evidenceError } = await supabase
         .from('evidence')
         .insert({
-          obligation_id: obligation.obligation_id, // Use text obligation_id
+          obligation_id: obligation.obligation_id,
           occurrence_id: progressId,
           region_id: regionId,
           file_name: selectedFile.name,
@@ -855,12 +978,13 @@ const ObligationDetails = () => {
 
       if (evidenceError) throw evidenceError;
 
-      // Update progress status to "Submitted/Under Review"
+      // Update progress status to "Submitted/Under Review" with approval_level 'regional'
       if (evidenceData && evidenceData[0]) {
         const updateResult = await supabase
           .from('compliance_progress')
           .update({
             status: 'Submitted/Under Review',
+            approval_level: 'regional', // Waiting for Regional Manager
             evidence_id: evidenceData[0].id,
             uploaded_by: profile?.id || null,
             updated_at: new Date().toISOString()
@@ -873,7 +997,14 @@ const ObligationDetails = () => {
           throw updateResult.error;
         }
 
-        showMessage('Evidence submitted for review. Status updated to "Submitted/Under Review"', "success");
+        await addActivityHistory(
+          obligation.obligation_id,
+          progressId,
+          `Evidence uploaded - Waiting for Regional Manager approval`,
+          `Submitted by ${profile?.full_name || 'User'}`
+        );
+
+        showMessage('Evidence submitted for Regional Manager approval.', "success");
       }
 
       // Refresh data
@@ -881,11 +1012,11 @@ const ObligationDetails = () => {
         fetchObligationDetails(),
         fetchRegionProgress(),
         fetchOccurrences(),
-        checkPendingApproval(),
+        checkPendingApprovals(),
         fetchProgressRecords()
       ]);
       
-      showMessage(`Evidence uploaded successfully${!isAdmin && userRegion ? ` for region ${userRegion}` : ''}!`, "success");
+      showMessage(`Evidence uploaded successfully${!isAdminUser && userRegion ? ` for region ${userRegion}` : ''}!`, "success");
       setSelectedFile(null);
       
       if (fileInputRef.current) {
@@ -902,97 +1033,186 @@ const ObligationDetails = () => {
     }
   };
 
-  const handleApprove = async () => {
-    if (!pendingApproval) return;
+  // ============================================================
+  // TWO-LEVEL APPROVAL FUNCTIONS
+  // ============================================================
 
+  // Regional Manager Approve
+  const handleManagerApprove = async () => {
+    if (!pendingManagerApproval) return;
+
+    setProcessingId(pendingManagerApproval.id);
     try {
-      const { error } = await supabase
-        .from('compliance_progress')
-        .update({
-          status: 'Closed',
-          updated_by: profile?.id || null,
-          comments: comment || 'Approved by admin',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', pendingApproval.id);
+      const result = await managerApprove(pendingManagerApproval.id, comment);
+      if (result.error) throw result.error;
 
-      if (error) throw error;
-
-      await supabase.from("activity_history").insert({
-        obligation_id: obligation.id,
-        progress_id: pendingApproval.id,
-        action: 'Approved and closed',
-        user_id: profile?.id || null,
-        user_name: profile?.full_name || "System",
-        details: { comment: comment || "Approved by admin" },
-        created_at: new Date().toISOString()
-      });
-
-      // Update evidence status
-      if (pendingApproval.evidence_id) {
-        await supabase
-          .from('evidence')
-          .update({ status: 'Closed' })
-          .eq('id', pendingApproval.evidence_id);
-      }
-
-      showMessage('Occurrence approved and closed successfully!', "success");
+      showMessage('✅ Approved by Regional Manager! Waiting for Admin approval.', "success");
       setComment('');
       await Promise.all([
         fetchObligationDetails(),
-        checkPendingApproval(),
+        checkPendingApprovals(),
         fetchProgressRecords()
       ]);
     } catch (error) {
-      console.error('Error approving:', error);
+      console.error('Error in manager approval:', error);
       showMessage('Failed to approve. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
     }
   };
 
-  const handleReject = async () => {
-    if (!pendingApproval) return;
+  // Regional Manager Reject
+  const handleManagerReject = async () => {
+    if (!pendingManagerApproval) return;
 
+    setProcessingId(pendingManagerApproval.id);
     try {
-      const { error } = await supabase
-        .from('compliance_progress')
-        .update({
-          status: 'Open',
-          updated_by: profile?.id || null,
-          comments: comment || 'Rejected, please resubmit',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', pendingApproval.id);
+      const result = await managerReject(pendingManagerApproval.id, comment || 'Rejected by Regional Manager');
+      if (result.error) throw result.error;
 
-      if (error) throw error;
-
-      await supabase.from("activity_history").insert({
-        obligation_id: obligation.id,
-        progress_id: pendingApproval.id,
-        action: 'Rejected',
-        user_id: profile?.id || null,
-        user_name: profile?.full_name || "System",
-        details: { comment: comment || "Rejected by admin" },
-        created_at: new Date().toISOString()
-      });
-
-      // Update evidence status
-      if (pendingApproval.evidence_id) {
-        await supabase
-          .from('evidence')
-          .update({ status: 'Rejected' })
-          .eq('id', pendingApproval.evidence_id);
-      }
-
-      showMessage('Occurrence rejected successfully!', "success");
+      showMessage('Occurrence rejected and sent back to regional user.', "success");
       setComment('');
       await Promise.all([
         fetchObligationDetails(),
-        checkPendingApproval(),
+        checkPendingApprovals(),
         fetchProgressRecords()
       ]);
     } catch (error) {
+      console.error('Error in manager rejection:', error);
+      showMessage('Failed to reject. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Admin Final Approve
+  const handleAdminFinalApprove = async () => {
+    if (!pendingAdminApproval) return;
+
+    setProcessingId(pendingAdminApproval.id);
+    try {
+      const result = await adminFinalApprove(pendingAdminApproval.id, comment);
+      if (result.error) throw result.error;
+
+      showMessage('✅ Admin final approved! Occurrence closed.', "success");
+      setComment('');
+      await Promise.all([
+        fetchObligationDetails(),
+        checkPendingApprovals(),
+        fetchProgressRecords()
+      ]);
+    } catch (error) {
+      console.error('Error in admin final approval:', error);
+      showMessage('Failed to approve. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Admin Reject
+  const handleAdminReject = async () => {
+    if (!pendingAdminApproval) return;
+
+    setProcessingId(pendingAdminApproval.id);
+    try {
+      const result = await adminReject(pendingAdminApproval.id, comment || 'Rejected by Admin');
+      if (result.error) throw result.error;
+
+      showMessage('Admin rejected - Sent back to Regional Manager.', "success");
+      setComment('');
+      await Promise.all([
+        fetchObligationDetails(),
+        checkPendingApprovals(),
+        fetchProgressRecords()
+      ]);
+    } catch (error) {
+      console.error('Error in admin rejection:', error);
+      showMessage('Failed to reject. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Legacy Approve (for backward compatibility)
+  const handleApprove = async () => {
+    if (!pendingApproval) return;
+
+    setProcessingId(pendingApproval.id);
+    try {
+      // Determine which approval function to use based on role and approval level
+      if (isManager && pendingApproval.approval_level === 'regional') {
+        await handleManagerApprove();
+      } else if (isAdminUser && pendingApproval.approval_level === 'manager') {
+        await handleAdminFinalApprove();
+      } else if (isAdminUser) {
+        // Fallback for admin - final approve
+        const result = await adminFinalApprove(pendingApproval.id, comment);
+        if (result.error) throw result.error;
+        showMessage('✅ Approved successfully!', "success");
+        setComment('');
+        await Promise.all([
+          fetchObligationDetails(),
+          checkPendingApprovals(),
+          fetchProgressRecords()
+        ]);
+      } else {
+        showMessage('You do not have permission to approve this.', "error");
+      }
+    } catch (error) {
+      console.error('Error approving:', error);
+      showMessage('Failed to approve. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Legacy Reject (for backward compatibility)
+  const handleReject = async () => {
+    if (!pendingApproval) return;
+
+    setProcessingId(pendingApproval.id);
+    try {
+      // Determine which reject function to use based on role and approval level
+      if (isManager && pendingApproval.approval_level === 'regional') {
+        await handleManagerReject();
+      } else if (isAdminUser && pendingApproval.approval_level === 'manager') {
+        await handleAdminReject();
+      } else if (isAdminUser) {
+        const result = await adminReject(pendingApproval.id, comment || 'Rejected by Admin');
+        if (result.error) throw result.error;
+        showMessage('Occurrence rejected.', "success");
+        setComment('');
+        await Promise.all([
+          fetchObligationDetails(),
+          checkPendingApprovals(),
+          fetchProgressRecords()
+        ]);
+      } else {
+        showMessage('You do not have permission to reject this.', "error");
+      }
+    } catch (error) {
       console.error('Error rejecting:', error);
       showMessage('Failed to reject. Please try again.', "error");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // View Approval History
+  const handleViewApprovalHistory = async () => {
+    if (!pendingApproval) return;
+
+    try {
+      const result = await getApprovalHistory(pendingApproval.id);
+      if (!result.error) {
+        setApprovalHistory(result.data);
+        setShowHistoryModal(true);
+      } else {
+        showMessage('Failed to load approval history', "error");
+      }
+    } catch (error) {
+      console.error('Error fetching approval history:', error);
+      showMessage('Failed to load approval history', "error");
     }
   };
 
@@ -1015,6 +1235,22 @@ const ObligationDetails = () => {
     } catch (error) {
       console.error("Error adding comment:", error);
       showMessage("Failed to add comment. Please try again.", "error");
+    }
+  };
+
+  const addActivityHistory = async (obligationId, progressId, action, details) => {
+    try {
+      await supabase.from("activity_history").insert({
+        obligation_id: obligationId,
+        progress_id: progressId,
+        action: action,
+        user_id: profile?.id || null,
+        user_name: profile?.full_name || "System",
+        details: details ? { comment: details } : null,
+        created_at: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Error adding activity history:', error);
     }
   };
 
@@ -1047,6 +1283,47 @@ const ObligationDetails = () => {
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
+
+  // Get the appropriate approval action for the current user
+  const getApprovalActions = () => {
+    if (isManager && pendingManagerApproval) {
+      return {
+        canApprove: true,
+        canReject: true,
+        approveLabel: '✅ Approve & Send to Admin',
+        rejectLabel: 'Reject & Send Back',
+        onApprove: handleManagerApprove,
+        onReject: handleManagerReject,
+        pendingItem: pendingManagerApproval
+      };
+    } else if (isAdminUser && pendingAdminApproval) {
+      return {
+        canApprove: true,
+        canReject: true,
+        approveLabel: '✅ Final Approve',
+        rejectLabel: 'Reject & Send Back to Manager',
+        onApprove: handleAdminFinalApprove,
+        onReject: handleAdminReject,
+        pendingItem: pendingAdminApproval
+      };
+    } else if (isAdminUser && pendingManagerApproval) {
+      // Admin can also see manager pending items
+      return {
+        canApprove: false,
+        canReject: false,
+        pendingItem: pendingManagerApproval,
+        message: 'Waiting for Regional Manager approval'
+      };
+    } else {
+      return {
+        canApprove: false,
+        canReject: false,
+        pendingItem: null
+      };
+    }
+  };
+
+  const approvalActions = getApprovalActions();
 
   if (loading) {
     return (
@@ -1097,6 +1374,8 @@ const ObligationDetails = () => {
     ? getAllowedFileTypes(obligation.evidence_type)
     : { accept: "*", label: "All file types" };
 
+  const pendingItem = approvalActions.pendingItem;
+
   return (
     <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0 relative">
       {/* Center Message */}
@@ -1141,25 +1420,46 @@ const ObligationDetails = () => {
             {obligation.obligation_id}
           </h1>
           <p className="text-sm text-gray-600 break-words">{obligation.obligation_name}</p>
-          {!isAdmin && userRegion && (
-            <span className="inline-flex items-center mt-1">
-              <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
-                Region: {userRegion}
-              </span>
-              {regionProgress && (
-                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getStatusBadge(regionProgress.status)}`}>
-                  Status: {regionProgress.status}
+          <div className="flex flex-wrap items-center gap-2 mt-1">
+            {!isAdminUser && userRegion && (
+              <span className="inline-flex items-center">
+                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                  Region: {userRegion}
                 </span>
-              )}
-            </span>
-          )}
-          {isAdmin && (
-            <span className="inline-flex items-center mt-1">
-              <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
-                Admin - All Regions
+                {regionProgress && (
+                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getStatusBadge(regionProgress.status)}`}>
+                    Status: {regionProgress.status}
+                  </span>
+                )}
+                {regionProgress?.approval_level && (
+                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getApprovalLevelBadge(regionProgress.approval_level)}`}>
+                    {getApprovalLevelLabel(regionProgress.approval_level)}
+                  </span>
+                )}
               </span>
-            </span>
-          )}
+            )}
+            {isAdminUser && (
+              <span className="inline-flex items-center">
+                <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
+                  Admin - All Regions
+                </span>
+              </span>
+            )}
+            {isManager && (
+              <span className="inline-flex items-center">
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                  Manager - {userRegion}
+                </span>
+              </span>
+            )}
+            {isRegionalUserRole && (
+              <span className="inline-flex items-center">
+                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">
+                  Regional User
+                </span>
+              </span>
+            )}
+          </div>
         </div>
         <button
           onClick={() => navigate("/compliance")}
@@ -1244,7 +1544,6 @@ const ObligationDetails = () => {
                   {obligation.due_date_rule || "N/A"}
                 </dd>
               </div>
-             
               <div>
                 <dt className="text-xs sm:text-sm font-medium text-gray-500">
                   Compliance Weight
@@ -1299,64 +1598,54 @@ const ObligationDetails = () => {
                   {obligation.mandatory ? "Yes" : "No"}
                 </dd>
               </div>
-              
+              {obligation.approval_level && (
+                <div className="col-span-1 sm:col-span-2">
+                  <dt className="text-xs sm:text-sm font-medium text-gray-500">Approval Status</dt>
+                  <dd className="mt-1">
+                    <span className={`px-2 py-1 text-xs font-medium rounded-full ${getApprovalLevelBadge(obligation.approval_level)}`}>
+                      {getApprovalLevelLabel(obligation.approval_level)}
+                    </span>
+                  </dd>
+                </div>
+              )}
             </dl>
           </div>
 
-          {/* <div className="bg-white rounded-lg shadow p-4 sm:p-6">
-            <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-              Update Status {!isAdmin && userRegion && `(Region: ${userRegion})`}
-            </h3>
-            <div className="flex flex-wrap gap-2">
-              {["Open", "Submitted/Under Review", "Closed"].map((status) => (
-                <button
-                  key={status}
-                  onClick={() => handleStatusUpdate(status)}
-                  className={`px-3 sm:px-4 py-1.5 sm:py-2 rounded-md transition-colors text-xs sm:text-sm ${
-                    (obligation.current_status === status) ||
-                    (regionProgress?.status === status && !isAdmin && userRegion)
-                      ? `bg-${getStatusColor(status)}-600 text-white`
-                      : `bg-${getStatusColor(status)}-100 text-${getStatusColor(status)}-700 hover:bg-${getStatusColor(status)}-200`
-                  }`}
-                >
-                  {status}
-                  {!isAdmin && userRegion && regionProgress?.status === status && (
-                    <span className="ml-1 text-[8px]">✓</span>
-                  )}
-                </button>
-              ))}
-            </div>
-            {!isAdmin && userRegion && regionProgress && (
-              <p className="text-xs text-gray-500 mt-2">
-                Current region status: <span className="font-medium">{regionProgress.status}</span>
-                {regionProgress.occurrence_date && ` • Occurrence: ${formatDate(regionProgress.occurrence_date)}`}
-              </p>
-            )}
-          </div> */}
-
-          {/* Admin Approval Actions */}
-          {isAdmin && pendingApproval && (
+          {/* Approval Actions - Updated for two-level */}
+          {approvalActions.canApprove && pendingItem && (
             <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-yellow-400">
               <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
-                Pending Approval
+                Pending Approval - {isManager ? 'Regional Manager' : 'Admin'}
               </h3>
               <div className="bg-yellow-50 p-3 sm:p-4 rounded-lg border border-yellow-200 mb-4">
                 <p className="text-sm text-yellow-800">
-                  This obligation has been submitted for review and is waiting for your approval.
+                  {isManager 
+                    ? 'This obligation has been submitted for your review.'
+                    : 'This obligation has been approved by the Regional Manager and is waiting for your final approval.'}
                 </p>
                 <p className="text-xs text-gray-600 mt-1">
-                  Region: <span className="font-medium">{pendingApproval.region?.name || "N/A"}</span>
+                  Region: <span className="font-medium">{pendingItem.region?.name || "N/A"}</span>
                 </p>
-                {pendingApproval.comments && (
+                <p className="text-xs text-gray-600 mt-1">
+                  Approval Level: <span className={`font-medium ${getApprovalLevelBadge(pendingItem.approval_level)}`}>
+                    {getApprovalLevelLabel(pendingItem.approval_level)}
+                  </span>
+                </p>
+                {pendingItem.manager_approved_by && (
                   <p className="text-xs text-gray-600 mt-1">
-                    <span className="font-medium">Submission Note:</span> {pendingApproval.comments}
+                    Manager Approved: <span className="font-medium">{formatDateTime(pendingItem.manager_approved_at)}</span>
                   </p>
                 )}
-                {pendingApproval.evidence && (
+                {pendingItem.comments && (
+                  <p className="text-xs text-gray-600 mt-1">
+                    <span className="font-medium">Note:</span> {pendingItem.comments}
+                  </p>
+                )}
+                {pendingItem.evidence && (
                   <div className="mt-2">
                     <p className="text-xs font-medium text-gray-700">Evidence:</p>
                     <a 
-                      href={pendingApproval.evidence.file_url} 
+                      href={pendingItem.evidence.file_url} 
                       target="_blank" 
                       rel="noopener noreferrer"
                       className="text-[#8cc63e] hover:underline text-sm flex items-center gap-1"
@@ -1364,28 +1653,73 @@ const ObligationDetails = () => {
                       <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                       </svg>
-                      {pendingApproval.evidence.file_name}
+                      {pendingItem.evidence.file_name}
                     </a>
                   </div>
                 )}
               </div>
               <div className="flex flex-col sm:flex-row gap-3">
                 <button
-                  onClick={handleApprove}
-                  className="flex-1 bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition-colors text-sm"
+                  onClick={approvalActions.onApprove}
+                  disabled={processingId === pendingItem.id}
+                  className="flex-1 bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition-colors text-sm disabled:opacity-50"
                 >
-                  Approve & Close
+                  {processingId === pendingItem.id ? (
+                    <svg className="animate-spin h-4 w-4 mx-auto" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : (
+                    approvalActions.approveLabel
+                  )}
                 </button>
                 <button
-                  onClick={handleReject}
-                  className="flex-1 bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors text-sm"
+                  onClick={approvalActions.onReject}
+                  disabled={processingId === pendingItem.id}
+                  className="flex-1 bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors text-sm disabled:opacity-50"
                 >
-                  Reject
+                  {processingId === pendingItem.id ? (
+                    <svg className="animate-spin h-4 w-4 mx-auto" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                  ) : (
+                    approvalActions.rejectLabel
+                  )}
+                </button>
+                <button
+                  onClick={handleViewApprovalHistory}
+                  className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
+                >
+                  📋 History
                 </button>
               </div>
               <p className="text-xs text-gray-400 mt-2">
                 {comment ? `Comment: "${comment}"` : 'Add a comment in the box below before approving or rejecting.'}
               </p>
+            </div>
+          )}
+
+          {/* Message when waiting for other approval */}
+          {approvalActions.message && pendingItem && (
+            <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-blue-400">
+              <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-2">
+                Approval Status
+              </h3>
+              <div className="bg-blue-50 p-3 sm:p-4 rounded-lg border border-blue-200">
+                <p className="text-sm text-blue-800">
+                  {approvalActions.message}
+                </p>
+                <p className="text-xs text-gray-600 mt-1">
+                  Region: <span className="font-medium">{pendingItem.region?.name || "N/A"}</span>
+                </p>
+                <button
+                  onClick={handleViewApprovalHistory}
+                  className="mt-2 text-blue-600 hover:text-blue-800 text-sm font-medium"
+                >
+                  View Approval History →
+                </button>
+              </div>
             </div>
           )}
 
@@ -1442,188 +1776,149 @@ const ObligationDetails = () => {
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Evidence
-             
             </h3>
             <div className="space-y-4">
-              <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-6 text-center">
-                <svg
-                  className="h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mx-auto"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="2"
-                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
-                  />
-                </svg>
-                <p className="mt-2 text-xs sm:text-sm text-gray-600">
-                  Upload evidence documents
-                </p>
-                {obligation.evidence_type && (
-                  <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
-                    Allowed: {allowedTypes.label}
+              {canUploadEvidence && (
+                <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 sm:p-6 text-center">
+                  <svg
+                    className="h-10 w-10 sm:h-12 sm:w-12 text-gray-400 mx-auto"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"
+                    />
+                  </svg>
+                  <p className="mt-2 text-xs sm:text-sm text-gray-600">
+                    Upload evidence documents
                   </p>
-                )}
-                <input
-                  ref={fileInputRef}
-                  id="file-upload"
-                  type="file"
-                  onChange={handleFileSelect}
-                  disabled={uploading}
-                  accept={allowedTypes.accept}
-                  className="mt-2 block w-full text-xs sm:text-sm text-gray-500 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-md file:border-0 file:text-xs sm:file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
-                />
-                {uploadError && (
-                  <div className="mt-2 text-xs sm:text-sm text-red-600 break-words">
-                    {uploadError}
-                  </div>
-                )}
-                {selectedFile && (
-                  <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                    <p className="text-xs sm:text-sm text-green-700 font-medium break-words">
-                      File selected: {selectedFile.name}
+                  {obligation.evidence_type && (
+                    <p className="text-[10px] sm:text-xs text-gray-500 mt-1">
+                      Allowed: {allowedTypes.label}
                     </p>
-                    <p className="text-[10px] sm:text-xs text-green-600">
-                      Size: {(selectedFile.size / 1024).toFixed(1)} KB
-                    </p>
-                    <button
-                      onClick={handleFileUpload}
-                      disabled={uploading}
-                      className="w-full mt-2 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                    >
-                      {uploading ? (
-                        <>
-                          <svg
-                            className="animate-spin -ml-1 mr-2 h-4 w-4 inline"
-                            xmlns="http://www.w3.org/2000/svg"
-                            fill="none"
-                            viewBox="0 0 24 24"
-                          >
-                            <circle
-                              className="opacity-25"
-                              cx="12"
-                              cy="12"
-                              r="10"
-                              stroke="currentColor"
-                              strokeWidth="4"
-                            ></circle>
-                            <path
-                              className="opacity-75"
-                              fill="currentColor"
-                              d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                            ></path>
-                          </svg>
-                          Uploading...
-                        </>
-                      ) : (
-                        "Upload Evidence"
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    id="file-upload"
+                    type="file"
+                    onChange={handleFileSelect}
+                    disabled={uploading}
+                    accept={allowedTypes.accept}
+                    className="mt-2 block w-full text-xs sm:text-sm text-gray-500 file:mr-4 file:py-1.5 sm:file:py-2 file:px-3 sm:file:px-4 file:rounded-md file:border-0 file:text-xs sm:file:text-sm file:font-semibold file:bg-[#8cc63e]/10 file:text-[#8cc63e] hover:file:bg-[#8cc63e]/20"
+                  />
+                  {uploadError && (
+                    <div className="mt-2 text-xs sm:text-sm text-red-600 break-words">
+                      {uploadError}
+                    </div>
+                  )}
+                  {selectedFile && (
+                    <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
+                      <p className="text-xs sm:text-sm text-green-700 font-medium break-words">
+                        File selected: {selectedFile.name}
+                      </p>
+                      <p className="text-[10px] sm:text-xs text-green-600">
+                        Size: {(selectedFile.size / 1024).toFixed(1)} KB
+                      </p>
+                      <button
+                        onClick={handleFileUpload}
+                        disabled={uploading}
+                        className="w-full mt-2 bg-[#8cc63e] text-white px-4 py-2 rounded-md hover:bg-[#7ab83a] disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                      >
+                        {uploading ? (
+                          <>
+                            <svg
+                              className="animate-spin -ml-1 mr-2 h-4 w-4 inline"
+                              xmlns="http://www.w3.org/2000/svg"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                            >
+                              <circle
+                                className="opacity-25"
+                                cx="12"
+                                cy="12"
+                                r="10"
+                                stroke="currentColor"
+                                strokeWidth="4"
+                              ></circle>
+                              <path
+                                className="opacity-75"
+                                fill="currentColor"
+                                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                              ></path>
+                            </svg>
+                            Uploading...
+                          </>
+                        ) : (
+                          "Upload Evidence"
+                        )}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Display uploaded evidence with delete button */}
               {evidence.length > 0 ? (
                 <>
-                 <h4 className="text-sm font-semibold text-green-500 mb-2">
-      Uploaded Evidence
-    </h4>
-                <div className="space-y-2 max-h-60 overflow-y-auto">
-                  {evidence.map((item) => {
-                    // Check if user can delete this evidence
-                    const canDelete = isAdmin || (userRegion && item.region_id);
-                    const isDeleting = deletingEvidence === item.id;
-                    
-                    return (
-                      <div key={item.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
-                        <div className="flex flex-col sm:flex-row justify-between items-start gap-2 sm:gap-0">
-                          <div className="flex-1 min-w-0 w-full">
-                            <div className="flex items-center flex-wrap gap-1">
-                              <p className="text-xs sm:text-sm font-medium text-gray-900 break-words">
-                                {item.file_name}
-                              </p>
-                              
-                            </div>
-                            <p className="text-[10px] sm:text-xs text-gray-500">
-                              Uploaded: {formatDateTime(item.uploaded_at)}
-                              {item.file_size && ` • Size: ${formatFileSize(item.file_size)}`}
-                            </p>
-                            {item.file_type && (
-                              <p className="text-[10px] text-gray-400">
-                                Type: {item.file_type}
-                              </p>
-                            )}
-                            {item.progress && (
-                              <div className="flex items-center flex-wrap gap-2 mt-1">
-                                <span className="text-[10px] text-gray-500">
-                                  Occurrence: {formatDate(item.progress.occurrence_date)}
+                  <h4 className="text-sm font-semibold text-green-500 mb-2">
+                    Uploaded Evidence
+                  </h4>
+                  <div className="space-y-2 max-h-60 overflow-y-auto">
+                    {evidence.map((item) => {
+                      const canDelete = isAdminUser || (isManager && item.region_id);
+                      const isDeleting = deletingEvidence === item.id;
+                      const approvalLevel = item.progress?.approval_level || 'regional';
+                      
+                      return (
+                        <div key={item.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
+                          <div className="flex flex-col sm:flex-row justify-between items-start gap-2 sm:gap-0">
+                            <div className="flex-1 min-w-0 w-full">
+                              <div className="flex items-center flex-wrap gap-1">
+                                <p className="text-xs sm:text-sm font-medium text-gray-900 break-words">
+                                  {item.file_name}
+                                </p>
+                                <span className={`px-1.5 py-0.5 text-[10px] rounded-full ${getApprovalLevelBadge(approvalLevel)}`}>
+                                  {getApprovalLevelLabel(approvalLevel)}
                                 </span>
-                               
                               </div>
-                            )}
-                            {!isAdmin && item.region_id && (
-                              <span className="inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800 mt-1">
-                                Region Uploaded
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-1 flex-shrink-0">
-                            {item.file_url && (
-                              <a
-                                href={item.file_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-blue-600 hover:text-blue-900 p-1 hover:bg-blue-50 rounded transition-colors"
-                                title="Download evidence"
-                              >
-                                <svg
-                                  className="h-5 w-5"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  viewBox="0 0 24 24"
+                              <p className="text-[10px] sm:text-xs text-gray-500">
+                                Uploaded: {formatDateTime(item.uploaded_at)}
+                                {item.file_size && ` • Size: ${formatFileSize(item.file_size)}`}
+                              </p>
+                              {item.file_type && (
+                                <p className="text-[10px] text-gray-400">
+                                  Type: {item.file_type}
+                                </p>
+                              )}
+                              {item.progress && (
+                                <div className="flex items-center flex-wrap gap-2 mt-1">
+                                  <span className="text-[10px] text-gray-500">
+                                    Occurrence: {formatDate(item.progress.occurrence_date)}
+                                  </span>
+                                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${getStatusBadge(item.progress.status)}`}>
+                                    {item.progress.status}
+                                  </span>
+                                </div>
+                              )}
+                              {!isAdminUser && item.region_id && (
+                                <span className="inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800 mt-1">
+                                  Region Uploaded
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-1 flex-shrink-0">
+                              {item.file_url && (
+                                <a
+                                  href={item.file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-600 hover:text-blue-900 p-1 hover:bg-blue-50 rounded transition-colors"
+                                  title="Download evidence"
                                 >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    strokeWidth="2"
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                  />
-                                </svg>
-                              </a>
-                            )}
-                            {canDelete && (
-                              <button
-                                onClick={() => handleEvidenceDelete(item)}
-                                disabled={isDeleting}
-                                className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors disabled:opacity-50 cursor-pointer"
-                                title="Delete evidence"
-                              >
-                                {isDeleting ? (
-                                  <svg
-                                    className="animate-spin h-5 w-5"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    fill="none"
-                                    viewBox="0 0 24 24"
-                                  >
-                                    <circle
-                                      className="opacity-25"
-                                      cx="12"
-                                      cy="12"
-                                      r="10"
-                                      stroke="currentColor"
-                                      strokeWidth="4"
-                                    ></circle>
-                                    <path
-                                      className="opacity-75"
-                                      fill="currentColor"
-                                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                                    ></path>
-                                  </svg>
-                                ) : (
                                   <svg
                                     className="h-5 w-5"
                                     fill="none"
@@ -1634,20 +1929,63 @@ const ObligationDetails = () => {
                                       strokeLinecap="round"
                                       strokeLinejoin="round"
                                       strokeWidth="2"
-                                      d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                      d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
                                     />
                                   </svg>
-                                )}
-                              </button>
-                            )}
+                                </a>
+                              )}
+                              {canDelete && (
+                                <button
+                                  onClick={() => handleEvidenceDelete(item)}
+                                  disabled={isDeleting}
+                                  className="text-red-600 hover:text-red-800 p-1 hover:bg-red-50 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                                  title="Delete evidence"
+                                >
+                                  {isDeleting ? (
+                                    <svg
+                                      className="animate-spin h-5 w-5"
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      fill="none"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <circle
+                                        className="opacity-25"
+                                        cx="12"
+                                        cy="12"
+                                        r="10"
+                                        stroke="currentColor"
+                                        strokeWidth="4"
+                                      ></circle>
+                                      <path
+                                        className="opacity-75"
+                                        fill="currentColor"
+                                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                                      ></path>
+                                    </svg>
+                                  ) : (
+                                    <svg
+                                      className="h-5 w-5"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      viewBox="0 0 24 24"
+                                    >
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth="2"
+                                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                                      />
+                                    </svg>
+                                  )}
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
+                      );
+                    })}
+                  </div>
                 </>
-                
               ) : (
                 <div className="text-center py-6 bg-gray-50 rounded-lg">
                   <svg
@@ -1666,9 +2004,11 @@ const ObligationDetails = () => {
                   <p className="text-xs sm:text-sm text-gray-500 mt-2">
                     No evidence uploaded yet
                   </p>
-                  <p className="text-[10px] text-gray-400">
-                    Upload evidence using the form above
-                  </p>
+                  {canUploadEvidence && (
+                    <p className="text-[10px] text-gray-400">
+                      Upload evidence using the form above
+                    </p>
+                  )}
                 </div>
               )}
             </div>
@@ -1823,6 +2163,122 @@ const ObligationDetails = () => {
           </div>
         </div>
       </div>
+
+      {/* Approval History Modal */}
+      {showHistoryModal && approvalHistory && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Approval History
+              </h3>
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setApprovalHistory(null);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              <div className="space-y-4">
+                {/* Regional Upload */}
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                    <svg className="h-4 w-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4 4m0 0L8 8m4-4v12" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">Evidence Uploaded</p>
+                    <p className="text-xs text-gray-500">Submitted for Regional Manager approval</p>
+                    <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.updated_at)}</p>
+                  </div>
+                </div>
+
+                {/* Manager Approval */}
+                {approvalHistory.manager_approved_by && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">Regional Manager Approved</p>
+                      <p className="text-xs text-gray-500">
+                        {approvalHistory.manager?.full_name || 'Manager'} • Waiting for Admin
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.manager_approved_at)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Admin Approval */}
+                {approvalHistory.admin_approved_by && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">Admin Final Approved</p>
+                      <p className="text-xs text-gray-500">
+                        {approvalHistory.admin?.full_name || 'Admin'} • Occurrence Closed
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.admin_approved_at)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {!approvalHistory.manager_approved_by && approvalHistory.approval_level === 'regional' && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-yellow-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-yellow-700">⏳ Waiting for Regional Manager</p>
+                      <p className="text-xs text-gray-500">Awaiting manager review and approval</p>
+                    </div>
+                  </div>
+                )}
+
+                {approvalHistory.manager_approved_by && !approvalHistory.admin_approved_by && approvalHistory.approval_level === 'manager' && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-blue-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-blue-700">⏳ Waiting for Admin</p>
+                      <p className="text-xs text-gray-500">Awaiting admin final approval</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setApprovalHistory(null);
+                }}
+                className="w-full bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

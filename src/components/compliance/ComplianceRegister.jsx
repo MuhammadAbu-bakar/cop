@@ -8,14 +8,23 @@ import {
   getRegions,
   getPolicies
 } from "../../api/compliance";
+import { isAdmin, isRegionalManager, isRegionalUser } from "../../api/auth";
 
 const ComplianceRegister = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { profile } = useAuth();
-  const isAdmin = profile?.role === "admin";
+  const isAdminUser = isAdmin(profile);
+  const isManager = isRegionalManager(profile);
+  const isRegionalUserRole = isRegionalUser(profile);
   const userRegion = profile?.region_name || null;
-  const canAddEvent = isAdmin || profile?.role === "regional_user";
+  const userRole = profile?.role || "regional_user";
+  
+  // Permissions
+  const canAddCyclic = isAdminUser;
+  const canAddEvent = isAdminUser || isRegionalUserRole || isManager;
+  const canEdit = isAdminUser;
+  const canDelete = isAdminUser;
   
   const [obligations, setObligations] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -287,9 +296,9 @@ const ComplianceRegister = () => {
       filters.year = currentYear.toString();
 
       console.log('📊 Fetching obligations with filters:', filters);
-      console.log('👤 User region:', userRegion, 'Is Admin:', isAdmin);
+      console.log('👤 User role:', userRole, 'Region:', userRegion, 'Is Admin:', isAdminUser);
 
-      const result = await getObligations(filters, userRegion, isAdmin);
+      const result = await getObligations(filters, userRegion, isAdminUser);
       
       if (result.error) {
         console.error("❌ Error fetching obligations:", result.error);
@@ -305,6 +314,7 @@ const ComplianceRegister = () => {
           console.log('📅 Sample obligation current_status:', result.data[0].current_status);
           console.log('📅 Sample obligation region:', result.data[0].region);
           console.log('📅 Sample obligation region_id:', result.data[0].region_id);
+          console.log('📅 Sample obligation approval_level:', result.data[0].approval_level);
         }
         
         setObligations(result.data || []);
@@ -318,7 +328,7 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Add event obligation - FIXED
+  // Add event obligation
   const handleAddEventObligation = async (eventObligation) => {
     try {
       setAddLoading(true);
@@ -427,6 +437,7 @@ const ComplianceRegister = () => {
             region_id: regionId,
             occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
             status: 'Open',
+            approval_level: 'regional', // Set initial approval level
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });
@@ -488,7 +499,7 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Status badge
+  // Status badge - Updated with approval level indicator
   const getStatusBadge = (status) => {
     const badges = {
       'Open': "bg-gray-100 text-gray-800",
@@ -496,6 +507,25 @@ const ComplianceRegister = () => {
       'Closed': "bg-green-100 text-green-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
+  };
+
+  // Approval level badge
+  const getApprovalLevelBadge = (level) => {
+    const badges = {
+      'regional': 'bg-yellow-100 text-yellow-800',
+      'manager': 'bg-blue-100 text-blue-800',
+      'admin': 'bg-green-100 text-green-800',
+    };
+    return badges[level] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getApprovalLevelLabel = (level) => {
+    const labels = {
+      'regional': '⏳ Manager Review',
+      'manager': '⏳ Admin Review',
+      'admin': '✅ Approved'
+    };
+    return labels[level] || level;
   };
 
   const getFrequencyBadge = (frequency) => {
@@ -722,6 +752,7 @@ const ComplianceRegister = () => {
             region_id: regionId,
             occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
             status: 'Open',
+            approval_level: 'regional', // Set initial approval level
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });
@@ -834,7 +865,7 @@ const ComplianceRegister = () => {
 
       if (error) throw error;
 
-      if (!isAdmin && userRegion) {
+      if (!isAdminUser && userRegion) {
         const regionId = await getRegionId(userRegion);
         if (regionId) {
           const currentDate = new Date();
@@ -991,6 +1022,7 @@ const ComplianceRegister = () => {
       console.log('📅 Sample filtered obligation calculated_due_date:', filtered[0]?.calculated_due_date);
       console.log('📅 Sample filtered obligation occurrence_date:', filtered[0]?.occurrence_date);
       console.log('📅 Sample filtered obligation current_status:', filtered[0]?.current_status);
+      console.log('📅 Sample filtered obligation approval_level:', filtered[0]?.approval_level);
       
       const years = new Set();
       filtered.forEach(o => {
@@ -1032,7 +1064,7 @@ const ComplianceRegister = () => {
     }
 
     // Apply region filter (admin only)
-    if (isAdmin && filterRegion && filterRegion !== 'all') {
+    if (isAdminUser && filterRegion && filterRegion !== 'all') {
       const selectedRegion = regions.find(r => r.name === filterRegion);
       console.log('🔍 Filtering by region:', filterRegion, 'Selected region object:', selectedRegion);
       
@@ -1052,11 +1084,9 @@ const ComplianceRegister = () => {
         // Check 3: Check progress records for region match
         if (item.progressRecords && Array.isArray(item.progressRecords) && item.progressRecords.length > 0) {
           const hasMatchingProgress = item.progressRecords.some(progress => {
-            // Check progress.region.name
             if (progress.region && progress.region.name === filterRegion) {
               return true;
             }
-            // Check progress.region_id
             if (selectedRegion && progress.region_id === selectedRegion.id) {
               return true;
             }
@@ -1161,23 +1191,29 @@ const ComplianceRegister = () => {
     if (filterMonth) {
       params.set('month', filterMonth);
     }
-    if (isAdmin && filterRegion && filterRegion !== 'all') {
+    if (isAdminUser && filterRegion && filterRegion !== 'all') {
       params.set('region', filterRegion);
     }
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
   };
 
-  // Render tooltip for obligation details
+  // Render tooltip for obligation details - Updated with approval level
   const renderTooltip = (obligation, dueDateColor, dueDate) => {
     const status = obligation.current_status || 'Open';
+    const approvalLevel = obligation.approval_level || 'regional';
     return (
       <div className="absolute left-0 top-full mt-1 w-64 sm:w-80 bg-white border border-gray-200 rounded-lg shadow-2xl z-50 p-3">
         <div className="space-y-1.5">
           <div className="flex justify-between items-start">
             <h4 className="text-xs font-semibold text-gray-900 break-words">{obligation.obligation_name}</h4>
-            <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ml-1 flex-shrink-0 ${getStatusBadge(status)}`}>
-              {status}
-            </span>
+            <div className="flex items-center gap-1">
+              <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getApprovalLevelBadge(approvalLevel)}`}>
+                {getApprovalLevelLabel(approvalLevel)}
+              </span>
+              <span className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(status)}`}>
+                {status}
+              </span>
+            </div>
           </div>
           <p className="text-xs text-gray-600 break-words">{obligation.description}</p>
           <div className="grid grid-cols-2 gap-1 text-[10px]">
@@ -1221,6 +1257,18 @@ const ComplianceRegister = () => {
               <span className="font-medium text-gray-500">Region:</span>
               <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
             </div>
+            {obligation.manager_approved_by && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Manager Approved:</span>
+                <span className="ml-1 text-gray-700">{formatDate(obligation.manager_approved_at)}</span>
+              </div>
+            )}
+            {obligation.admin_approved_by && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Admin Approved:</span>
+                <span className="ml-1 text-gray-700">{formatDate(obligation.admin_approved_at)}</span>
+              </div>
+            )}
             {obligation.evidence_required && (
               <div className="col-span-2">
                 <span className="font-medium text-gray-500">Evidence:</span>
@@ -1376,17 +1424,24 @@ const ComplianceRegister = () => {
               ? `${filteredObligations.length} obligations found`
               : `${filteredEventObligations.length} event obligations available`
             }
-            {!isAdmin && userRegion && (
+            {!isAdminUser && userRegion && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
                   Region: {userRegion}
                 </span>
               </span>
             )}
-            {isAdmin && (
+            {isAdminUser && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
                   Admin - All Regions
+                </span>
+              </span>
+            )}
+            {isManager && (
+              <span className="ml-2 inline-flex items-center">
+                <span className="text-xs bg-blue-100 text-blue-800 px-2 py-0.5 rounded-full">
+                  Manager - {userRegion}
                 </span>
               </span>
             )}
@@ -1424,7 +1479,7 @@ const ComplianceRegister = () => {
                 </button>
               </span>
             )}
-            {isAdmin && filterRegion !== "all" && activeTab === "todo" && (
+            {isAdminUser && filterRegion !== "all" && activeTab === "todo" && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
                   Region: {filterRegion}
@@ -1472,7 +1527,7 @@ const ComplianceRegister = () => {
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {isAdmin && (
+          {canAddCyclic && (
             <button
               onClick={() => handleAddClick("Cyclic")}
               className="bg-[#8cc63e] text-white px-3 py-1.5 sm:px-4 sm:py-2 rounded-md hover:bg-[#7ab83a] transition-colors flex items-center text-xs sm:text-sm"
@@ -1648,7 +1703,7 @@ const ComplianceRegister = () => {
               </select>
             </div>
             {/* Region Filter - Admin Only */}
-            {isAdmin && (
+            {isAdminUser && (
               <div>
                 <select
                   value={filterRegion}
@@ -1813,13 +1868,16 @@ const ComplianceRegister = () => {
                       {getSortIcon('status')}
                     </div>
                   </th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium text-gray-500 uppercase tracking-wider">
+                    Approval
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredObligations.length === 0 ? (
                   <tr>
-                    <td colSpan="6" className="px-2 py-8 text-center text-gray-500 text-sm">
-                      {!isAdmin && userRegion 
+                    <td colSpan="7" className="px-2 py-8 text-center text-gray-500 text-sm">
+                      {!isAdminUser && userRegion 
                         ? `No obligations found for region: ${userRegion}`
                         : "No obligations found matching your filters."}
                     </td>
@@ -1830,6 +1888,7 @@ const ComplianceRegister = () => {
                     const isOverdue = isDueDateOverdue(dueDate);
                     const dueDateColor = getDueDateColor(dueDate);
                     const status = obligation.current_status || 'Open';
+                    const approvalLevel = obligation.approval_level || 'regional';
                     const uniqueKey = `${obligation.id}-${index}`;
 
                     return (
@@ -1850,27 +1909,27 @@ const ComplianceRegister = () => {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
                               </svg>
                             </Link>
-                            {isAdmin && (
-                              <>
-                                <button
-                                  onClick={() => handleEditClick(obligation)}
-                                  className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
-                                  title="Edit"
-                                >
-                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                                  </svg>
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteClick(obligation)}
-                                  className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
-                                  title="Delete"
-                                >
-                                  <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                                  </svg>
-                                </button>
-                              </>
+                            {canEdit && (
+                              <button
+                                onClick={() => handleEditClick(obligation)}
+                                className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
+                                title="Edit"
+                              >
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                              </button>
+                            )}
+                            {canDelete && (
+                              <button
+                                onClick={() => handleDeleteClick(obligation)}
+                                className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
+                                title="Delete"
+                              >
+                                <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                              </button>
                             )}
                           </div>
                         </td>
@@ -1939,6 +1998,13 @@ const ComplianceRegister = () => {
                             {status}
                           </span>
                         </td>
+                        <td className="px-2 py-2 whitespace-nowrap">
+                          <span
+                            className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getApprovalLevelBadge(approvalLevel)}`}
+                          >
+                            {getApprovalLevelLabel(approvalLevel)}
+                          </span>
+                        </td>
                       </tr>
                     );
                   })
@@ -1950,7 +2016,7 @@ const ComplianceRegister = () => {
       )}
 
       {/* Add New Obligation Modal */}
-      {showAddModal && (isAdmin || canAddEvent) && (
+      {showAddModal && (canAddCyclic || canAddEvent) && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center z-10">
@@ -2203,7 +2269,7 @@ const ComplianceRegister = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-1">
                     Region
                   </label>
-                  {isAdmin ? (
+                  {isAdminUser ? (
                     <input
                       type="text"
                       name="region"
@@ -2221,7 +2287,7 @@ const ComplianceRegister = () => {
                       className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md bg-gray-100 text-gray-600 cursor-not-allowed"
                     />
                   )}
-                  {!isAdmin && userRegion && (
+                  {!isAdminUser && userRegion && (
                     <p className="text-xs text-gray-500 mt-1">
                       Region: {userRegion} (auto-assigned)
                     </p>
@@ -2400,7 +2466,7 @@ const ComplianceRegister = () => {
       )}
 
       {/* Edit Modal */}
-      {showEditModal && editingObligation && isAdmin && (
+      {showEditModal && editingObligation && canEdit && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-3xl max-h-[95vh] overflow-y-auto">
             <div className="sticky top-0 bg-white border-b border-gray-200 p-3 sm:p-4 flex justify-between items-center z-10">
@@ -2705,7 +2771,7 @@ const ComplianceRegister = () => {
       )}
 
       {/* Delete Confirmation Modal */}
-      {showDeleteModal && deletingObligation && isAdmin && (
+      {showDeleteModal && deletingObligation && canDelete && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-2 sm:p-4">
           <div className="bg-white rounded-lg shadow-xl max-w-md w-full">
             <div className="p-4 sm:p-6">

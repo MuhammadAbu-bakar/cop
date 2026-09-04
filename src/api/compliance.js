@@ -97,7 +97,12 @@ export const getObligations = async (
           updated_by,
           comments,
           created_at,
-          updated_at
+          updated_at,
+          approval_level,
+          manager_approved_by,
+          manager_approved_at,
+          admin_approved_by,
+          admin_approved_at
         `)
         .range(pageStart, pageStart + PAGE_SIZE - 1);
 
@@ -249,6 +254,11 @@ export const getObligations = async (
           occurrence_date: latestProgress?.occurrence_date || null,
           calculated_due_date: latestProgress?.calculated_due_date || null,
           region_id: latestProgress?.region_id || null,
+          approval_level: latestProgress?.approval_level || 'regional',
+          manager_approved_by: latestProgress?.manager_approved_by || null,
+          manager_approved_at: latestProgress?.manager_approved_at || null,
+          admin_approved_by: latestProgress?.admin_approved_by || null,
+          admin_approved_at: latestProgress?.admin_approved_at || null,
           progressRecords: latestProgress ? [latestProgress] : [],
           latestProgress: latestProgress,
           _status: status,
@@ -282,6 +292,11 @@ export const getObligations = async (
           progress_updated_at: progress.updated_at,
           evidence_id: progress.evidence_id,
           current_status: progress.status,
+          approval_level: progress.approval_level || 'regional',
+          manager_approved_by: progress.manager_approved_by || null,
+          manager_approved_at: progress.manager_approved_at || null,
+          admin_approved_by: progress.admin_approved_by || null,
+          admin_approved_at: progress.admin_approved_at || null,
           _status: progress.status,
           _frequency: obligation.frequency,
           _domain: obligation.domain,
@@ -310,7 +325,7 @@ export const getObligations = async (
     if (finalData.length > 0) {
       console.log('📋 Sample final data:');
       finalData.slice(0, 5).forEach((item, idx) => {
-        console.log(`  ${idx + 1}. ${item.obligation_id} - ${item.obligation_name} - Due: ${item.calculated_due_date} - Status: ${item.current_status}`);
+        console.log(`  ${idx + 1}. ${item.obligation_id} - ${item.obligation_name} - Due: ${item.calculated_due_date} - Status: ${item.current_status} - Approval: ${item.approval_level}`);
       });
     }
 
@@ -368,6 +383,11 @@ export const getObligationById = async (id, userRegion = null, isAdmin = false) 
         data.progress_updated_by = latestProgress.updated_by;
         data.occurrence_date = latestProgress.occurrence_date;
         data.calculated_due_date = latestProgress.calculated_due_date;
+        data.approval_level = latestProgress.approval_level || 'regional';
+        data.manager_approved_by = latestProgress.manager_approved_by || null;
+        data.manager_approved_at = latestProgress.manager_approved_at || null;
+        data.admin_approved_by = latestProgress.admin_approved_by || null;
+        data.admin_approved_at = latestProgress.admin_approved_at || null;
       }
     }
 
@@ -423,6 +443,11 @@ export const getObligationByObligationId = async (obligationId, userRegion = nul
         data.progress_updated_by = latestProgress.updated_by;
         data.occurrence_date = latestProgress.occurrence_date;
         data.calculated_due_date = latestProgress.calculated_due_date;
+        data.approval_level = latestProgress.approval_level || 'regional';
+        data.manager_approved_by = latestProgress.manager_approved_by || null;
+        data.manager_approved_at = latestProgress.manager_approved_at || null;
+        data.admin_approved_by = latestProgress.admin_approved_by || null;
+        data.admin_approved_at = latestProgress.admin_approved_at || null;
       }
     }
 
@@ -459,6 +484,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
         occurrence_date: instanceDate.toISOString().split('T')[0],
         calculated_due_date: dueDateStr,
         status: 'Open',
+        approval_level: 'regional',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
@@ -509,6 +535,7 @@ export const generateOccurrences = async (obligationId, regionId, frequency, due
         occurrence_date: instanceDate.toISOString().split('T')[0],
         calculated_due_date: dueDateForOccurrence.toISOString().split('T')[0],
         status: 'Open',
+        approval_level: 'regional',
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       });
@@ -607,13 +634,224 @@ export const updateOccurrenceStatus = async (progressId, status, evidenceId = nu
 }
 
 // ============================================================
-// APPROVAL FUNCTIONS - FIXED FOR AMBIGUOUS RELATIONSHIP
+// TWO-LEVEL APPROVAL FUNCTIONS
 // ============================================================
 
-export const getPendingApprovals = async (userRegion = null, isAdmin = false) => {
+// Submit for Regional Manager Approval
+export const submitForRegionalApproval = async (progressId, evidenceId = null) => {
   try {
-    // First, get the progress records with status 'Submitted/Under Review'
-    let progressQuery = supabase
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const updateData = {
+      status: 'Submitted/Under Review',
+      approval_level: 'regional',  // Waiting for regional manager
+      updated_by: user.data.user.id,
+      updated_at: new Date().toISOString()
+    };
+
+    if (evidenceId) {
+      updateData.evidence_id = evidenceId;
+    }
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .update(updateData)
+      .eq('id', progressId)
+      .select();
+
+    if (error) throw error;
+
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        progressId,
+        `Evidence uploaded - Waiting for Regional Manager approval`,
+        `Submitted by ${user.data.user.email}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error submitting for regional approval:', error);
+    return { data: null, error };
+  }
+};
+
+// Regional Manager Approves
+export const managerApprove = async (progressId, comment = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .update({
+        status: 'Submitted/Under Review',
+        approval_level: 'manager',  // Waiting for admin
+        manager_approved_by: user.data.user.id,
+        manager_approved_at: new Date().toISOString(),
+        comments: comment || 'Approved by Regional Manager',
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', progressId)
+      .select();
+
+    if (error) throw error;
+
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        progressId,
+        `Regional Manager approved - Waiting for Admin approval`,
+        `Approved by ${user.data.user.email}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error in manager approval:', error);
+    return { data: null, error };
+  }
+};
+
+// Regional Manager Rejects (sends back to regional user)
+export const managerReject = async (progressId, reason = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .update({
+        status: 'Open',
+        approval_level: 'regional',
+        comments: reason || 'Rejected by Regional Manager, please resubmit',
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', progressId)
+      .select();
+
+    if (error) throw error;
+
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        progressId,
+        `Regional Manager rejected - Please resubmit`,
+        `Rejected by ${user.data.user.email}: ${reason}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error in manager rejection:', error);
+    return { data: null, error };
+  }
+};
+
+// Admin Final Approval (closes the occurrence)
+export const adminFinalApprove = async (progressId, comment = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .update({
+        status: 'Closed',
+        approval_level: 'admin',  // Final approval
+        admin_approved_by: user.data.user.id,
+        admin_approved_at: new Date().toISOString(),
+        comments: comment || 'Final approved by Admin',
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', progressId)
+      .select();
+
+    if (error) throw error;
+
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        progressId,
+        `Admin final approved - Occurrence closed`,
+        `Approved by ${user.data.user.email}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error in admin final approval:', error);
+    return { data: null, error };
+  }
+};
+
+// Admin Rejects (sends back to regional manager)
+export const adminReject = async (progressId, reason = '') => {
+  try {
+    const user = await supabase.auth.getUser();
+    if (user.error) throw user.error;
+
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .update({
+        status: 'Submitted/Under Review',
+        approval_level: 'manager',  // Back to manager
+        comments: reason || 'Rejected by Admin, please review',
+        updated_by: user.data.user.id,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', progressId)
+      .select();
+
+    if (error) throw error;
+
+    if (data && data[0]) {
+      await addActivityHistory(
+        data[0].obligation_id,
+        progressId,
+        `Admin rejected - Sent back to Regional Manager`,
+        `Rejected by ${user.data.user.email}: ${reason}`
+      );
+    }
+
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error in admin rejection:', error);
+    return { data: null, error };
+  }
+};
+
+// Get pending approvals for Regional Manager
+export const getManagerPendingApprovals = async (userRegion = null, isAdmin = false) => {
+  try {
+    console.log('🔍 [getManagerPendingApprovals] START');
+    console.log('📥 Input:', { userRegion, isAdmin });
+
+    // Get region ID
+    let regionId = null;
+    if (userRegion) {
+      const { data, error } = await supabase
+        .from('regions')
+        .select('id')
+        .eq('name', userRegion)
+        .single();
+      
+      if (!error && data) {
+        regionId = data.id;
+        console.log('📍 Found region ID:', regionId);
+      } else {
+        console.error('❌ Region not found:', userRegion);
+        return { data: [], error: null };
+      }
+    }
+
+    // Build query - USE SPECIFIC RELATIONSHIP NAME
+    let query = supabase
       .from('compliance_progress')
       .select(`
         *,
@@ -632,67 +870,220 @@ export const getPendingApprovals = async (userRegion = null, isAdmin = false) =>
           policy,
           clause,
           due_date_rule
+        ),
+        evidence!compliance_progress_evidence_id_fkey(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by
+        ),
+        region:regions(id, name, code)
+      `)
+      .eq('status', 'Submitted/Under Review')
+      .eq('approval_level', 'regional')
+      .order('updated_at', { ascending: false });
+
+    if (regionId) {
+      query = query.eq('region_id', regionId);
+      console.log('🔍 Filtering by region_id:', regionId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('❌ Query error:', error);
+      return { data: [], error };
+    }
+
+    console.log(`✅ Found ${data?.length || 0} manager pending approvals`);
+    
+    if (data && data.length > 0) {
+      data.forEach((item, i) => {
+        console.log(`  📋 Record ${i + 1}:`, {
+          id: item.id,
+          obligation_id: item.obligation_id,
+          status: item.status,
+          approval_level: item.approval_level,
+          region_id: item.region_id,
+          evidence_id: item.evidence_id
+        });
+      });
+    }
+
+    return { data: data || [], error: null };
+  } catch (error) {
+    console.error('❌ Error in getManagerPendingApprovals:', error);
+    return { data: [], error };
+  }
+};
+
+// Get pending approvals for Admin (after manager approved)
+export const getAdminPendingApprovals = async (userRegion = null, isAdmin = false) => {
+  try {
+    let query = supabase
+      .from('compliance_progress')
+      .select(`
+        *,
+        obligation:compliance_obligations(
+          obligation_id,
+          obligation_name,
+          domain,
+          frequency,
+          description,
+          responsible,
+          accountable,
+          compliance_weight,
+          evidence_required,
+          evidence_type,
+          mandatory,
+          policy,
+          clause,
+          due_date_rule
+        ),
+        evidence!compliance_progress_evidence_id_fkey(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by
+        ),
+        region:regions(id, name, code)
+      `)
+      .eq('status', 'Submitted/Under Review')
+      .eq('approval_level', 'manager')
+      .order('updated_at', { ascending: false });
+
+    if (userRegion && !isAdmin) {
+      const regionId = await getRegionId(userRegion);
+      if (regionId) {
+        query = query.eq('region_id', regionId);
+      }
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.error('❌ Admin query error:', error);
+      return { data: [], error };
+    }
+
+    return { data: data || [], error: null };
+  } catch (error) {
+    console.error('Error fetching admin pending approvals:', error);
+    return { data: [], error };
+  }
+};
+
+// Get approval history for an occurrence
+export const getApprovalHistory = async (progressId) => {
+  try {
+    const { data, error } = await supabase
+      .from('compliance_progress')
+      .select(`
+        id,
+        status,
+        approval_level,
+        manager_approved_by,
+        manager_approved_at,
+        admin_approved_by,
+        admin_approved_at,
+        updated_by,
+        updated_at,
+        comments,
+        manager:profiles!compliance_progress_manager_approved_by_fkey(
+          id,
+          full_name,
+          email
+        ),
+        admin:profiles!compliance_progress_admin_approved_by_fkey(
+          id,
+          full_name,
+          email
         )
+      `)
+      .eq('id', progressId)
+      .single();
+
+    if (error) throw error;
+    return { data, error: null };
+  } catch (error) {
+    console.error('Error fetching approval history:', error);
+    return { data: null, error };
+  }
+};
+
+// ============================================================
+// APPROVAL FUNCTIONS - LEGACY (Backward Compatibility)
+// ============================================================
+
+export const getPendingApprovals = async (userRegion = null, isAdmin = false) => {
+  try {
+    let query = supabase
+      .from('compliance_progress')
+      .select(`
+        *,
+        obligation:compliance_obligations(
+          obligation_id,
+          obligation_name,
+          domain,
+          frequency,
+          description,
+          responsible,
+          accountable,
+          compliance_weight,
+          evidence_required,
+          evidence_type,
+          mandatory,
+          policy,
+          clause,
+          due_date_rule
+        ),
+        evidence!compliance_progress_evidence_id_fkey(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by
+        ),
+        region:regions(id, name, code)
       `)
       .eq('status', 'Submitted/Under Review')
       .order('updated_at', { ascending: false });
 
-    if (!isAdmin && userRegion) {
+    if (userRegion && !isAdmin) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
-        progressQuery = progressQuery.eq('region_id', regionId);
+        query = query.eq('region_id', regionId);
       }
     }
 
-    const { data: progressData, error: progressError } = await progressQuery;
+    const { data, error } = await query;
 
-    if (progressError) {
-      throw progressError;
+    if (error) {
+      console.error('❌ Pending approvals query error:', error);
+      return { data: [], error };
     }
 
-    if (!progressData || progressData.length === 0) {
-      return { data: [], error: null };
-    }
-
-    // Now, separately fetch evidence for each progress record
-    const evidenceIds = progressData
-      .map(p => p.evidence_id)
-      .filter(id => id !== null);
-
-    let evidenceMap = {};
-    if (evidenceIds.length > 0) {
-      const { data: evidenceData, error: evidenceError } = await supabase
-        .from('evidence')
-        .select('*')
-        .in('id', evidenceIds);
-
-      if (!evidenceError && evidenceData) {
-        evidenceData.forEach(e => {
-          evidenceMap[e.id] = e;
-        });
-      }
-    }
-
-    // Combine progress with evidence
-    const combinedData = progressData.map(progress => {
-      const evidence = progress.evidence_id ? evidenceMap[progress.evidence_id] : null;
-      return {
-        ...progress,
-        evidence: evidence
-      };
-    });
-
-    return { data: combinedData, error: null };
+    return { data: data || [], error: null };
   } catch (error) {
     console.error('Error fetching pending approvals:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 };
 
 export const getApprovedOccurrences = async (userRegion = null, isAdmin = false) => {
   try {
-    // First, get the progress records with status 'Closed'
-    let progressQuery = supabase
+    console.log('🔍 [getApprovedOccurrences] START');
+    console.log('📥 Input:', { userRegion, isAdmin });
+
+    let query = supabase
       .from('compliance_progress')
       .select(`
         *,
@@ -711,63 +1102,60 @@ export const getApprovedOccurrences = async (userRegion = null, isAdmin = false)
           policy,
           clause,
           due_date_rule
-        )
+        ),
+        evidence!compliance_progress_evidence_id_fkey(
+          id,
+          file_name,
+          file_url,
+          file_type,
+          file_size,
+          uploaded_at,
+          uploaded_by
+        ),
+        region:regions(id, name, code)
       `)
       .eq('status', 'Closed')
       .order('updated_at', { ascending: false });
 
-    if (!isAdmin && userRegion) {
+    // Apply region filter for non-admin users
+    if (userRegion && !isAdmin) {
       const regionId = await getRegionId(userRegion);
       if (regionId) {
-        progressQuery = progressQuery.eq('region_id', regionId);
+        query = query.eq('region_id', regionId);
+        console.log('🔍 Filtering approved by region_id:', regionId);
       }
     }
 
-    const { data: progressData, error: progressError } = await progressQuery;
+    const { data, error } = await query;
 
-    if (progressError) {
-      throw progressError;
+    if (error) {
+      console.error('❌ Approved query error:', error);
+      return { data: [], error };
     }
 
-    if (!progressData || progressData.length === 0) {
-      return { data: [], error: null };
-    }
-
-    // Now, separately fetch evidence for each progress record
-    const evidenceIds = progressData
-      .map(p => p.evidence_id)
-      .filter(id => id !== null);
-
-    let evidenceMap = {};
-    if (evidenceIds.length > 0) {
-      const { data: evidenceData, error: evidenceError } = await supabase
-        .from('evidence')
-        .select('*')
-        .in('id', evidenceIds);
-
-      if (!evidenceError && evidenceData) {
-        evidenceData.forEach(e => {
-          evidenceMap[e.id] = e;
+    console.log(`✅ Found ${data?.length || 0} approved occurrences`);
+    
+    if (data && data.length > 0) {
+      data.forEach((item, i) => {
+        console.log(`  📋 Approved ${i + 1}:`, {
+          id: item.id,
+          obligation_id: item.obligation_id,
+          status: item.status,
+          approval_level: item.approval_level,
+          region_id: item.region_id,
+          updated_at: item.updated_at
         });
-      }
+      });
     }
 
-    // Combine progress with evidence
-    const combinedData = progressData.map(progress => {
-      const evidence = progress.evidence_id ? evidenceMap[progress.evidence_id] : null;
-      return {
-        ...progress,
-        evidence: evidence
-      };
-    });
-
-    return { data: combinedData, error: null };
+    return { data: data || [], error: null };
   } catch (error) {
     console.error('Error fetching approved occurrences:', error);
-    return { data: null, error };
+    return { data: [], error };
   }
 };
 
+// Legacy approve function - for backward compatibility
 export const approveOccurrence = async (progressId, comment = '') => {
   try {
     const user = await supabase.auth.getUser();
@@ -777,6 +1165,9 @@ export const approveOccurrence = async (progressId, comment = '') => {
       .from('compliance_progress')
       .update({
         status: 'Closed',
+        approval_level: 'admin',
+        admin_approved_by: user.data.user.id,
+        admin_approved_at: new Date().toISOString(),
         comments: comment || 'Approved by admin',
         updated_by: user.data.user.id,
         updated_at: new Date().toISOString()
@@ -802,6 +1193,7 @@ export const approveOccurrence = async (progressId, comment = '') => {
   }
 };
 
+// Legacy reject function - for backward compatibility
 export const rejectOccurrence = async (progressId, reason = '') => {
   try {
     const user = await supabase.auth.getUser();
@@ -811,6 +1203,7 @@ export const rejectOccurrence = async (progressId, reason = '') => {
       .from('compliance_progress')
       .update({
         status: 'Open',
+        approval_level: 'regional',
         comments: reason || 'Rejected, please resubmit',
         updated_by: user.data.user.id,
         updated_at: new Date().toISOString()
@@ -836,6 +1229,7 @@ export const rejectOccurrence = async (progressId, reason = '') => {
   }
 };
 
+// Legacy submit function - for backward compatibility
 export const submitOccurrenceForReview = async (progressId, evidenceId = null) => {
   try {
     const user = await supabase.auth.getUser();
@@ -843,6 +1237,7 @@ export const submitOccurrenceForReview = async (progressId, evidenceId = null) =
 
     const updateData = {
       status: 'Submitted/Under Review',
+      approval_level: 'regional',  // Always start with regional approval
       updated_by: user.data.user.id,
       updated_at: new Date().toISOString()
     };
@@ -863,7 +1258,7 @@ export const submitOccurrenceForReview = async (progressId, evidenceId = null) =
       await addActivityHistory(
         data[0].obligation_id,
         progressId,
-        `Evidence uploaded - Submitted for review`,
+        `Evidence uploaded - Submitted for Regional Manager review`,
         `Submitted by ${user.data.user.email}`
       );
     }
@@ -876,7 +1271,7 @@ export const submitOccurrenceForReview = async (progressId, evidenceId = null) =
 };
 
 // ============================================================
-// EVIDENCE FUNCTIONS
+// EVIDENCE FUNCTIONS - UPDATED FOR TWO-LEVEL APPROVAL
 // ============================================================
 
 export const uploadEvidenceForOccurrence = async (file, progressId, obligationId, regionId, userRegion = null, isAdmin = false) => {
@@ -932,10 +1327,12 @@ export const uploadEvidenceForOccurrence = async (file, progressId, obligationId
     if (evidenceError) throw evidenceError;
 
     if (evidenceData && evidenceData[0]) {
+      // Submit for Regional Manager approval (first level)
       const updateResult = await supabase
         .from('compliance_progress')
         .update({
           status: 'Submitted/Under Review',
+          approval_level: 'regional',  // Waiting for manager
           evidence_id: evidenceData[0].id,
           uploaded_by: user.data.user.id,
           updated_at: new Date().toISOString()
@@ -951,7 +1348,7 @@ export const uploadEvidenceForOccurrence = async (file, progressId, obligationId
       await addActivityHistory(
         obligationId,
         progressId,
-        `Evidence uploaded - Submitted for review`,
+        `Evidence uploaded - Waiting for Regional Manager approval`,
         `Submitted by ${user.data.user.email}`
       );
     }
@@ -986,7 +1383,8 @@ export const getEvidence = async (obligationId, userRegion = null, isAdmin = fal
           id,
           occurrence_date,
           status,
-          region_id
+          region_id,
+          approval_level
         )
       `)
       .eq('obligation_id', obligationUuid)
@@ -1063,12 +1461,7 @@ export const getActivityHistory = async (obligationId, progressId = null) => {
 }
 
 // ============================================================
-// DASHBOARD STATS - FIXED
-// - Handles Supabase 1000-row limit using pagination
-// - Regional users see ONLY their region
-// - Admin users see ALL regions
-// - Only occurrence_date <= today is counted
-// - Correct status calculations
+// DASHBOARD STATS
 // ============================================================
 
 export const getDashboardStats = async (
@@ -1171,16 +1564,6 @@ export const getDashboardStats = async (
 
     // ---------------------------------------------------------
     // 4. FETCH ALL PROGRESS RECORDS
-    //
-    // IMPORTANT:
-    // Supabase/PostgREST normally returns max 1000 rows
-    // per request.
-    //
-    // Therefore we fetch in pages:
-    // 0-999
-    // 1000-1999
-    // 2000-2999
-    // ...
     // ---------------------------------------------------------
 
     const PAGE_SIZE = 1000;
@@ -1201,10 +1584,6 @@ export const getDashboardStats = async (
           pageStart + PAGE_SIZE - 1
         );
 
-      // -------------------------------------------------------
-      // REGIONAL USER
-      // -------------------------------------------------------
-
       if (!isAdmin && regionId) {
         progressQuery = progressQuery.eq(
           "region_id",
@@ -1215,10 +1594,6 @@ export const getDashboardStats = async (
           `🔐 Region filter applied: ${userRegion} (${regionId})`
         );
       }
-
-      // -------------------------------------------------------
-      // ADMIN
-      // -------------------------------------------------------
 
       if (isAdmin) {
         console.log(
@@ -1240,15 +1615,10 @@ export const getDashboardStats = async (
         throw pageError;
       }
 
-      // -------------------------------------------------------
-      // NO MORE RECORDS
-      // -------------------------------------------------------
-
       if (!pageData || pageData.length === 0) {
         break;
       }
 
-      // Add page to complete dataset
       progressData.push(...pageData);
 
       console.log(
@@ -1264,10 +1634,6 @@ export const getDashboardStats = async (
       console.log(
         `📊 Total records so far: ${progressData.length}`
       );
-
-      // -------------------------------------------------------
-      // LAST PAGE
-      // -------------------------------------------------------
 
       if (pageData.length < PAGE_SIZE) {
         break;
@@ -1340,14 +1706,13 @@ export const getDashboardStats = async (
     }
 
     // ---------------------------------------------------------
-    // 7. DEBUG REGION DISTRIBUTION
+    // 7-21. REST OF DASHBOARD STATS CALCULATIONS
+    // (Keeping the existing logic)
     // ---------------------------------------------------------
 
     const regionDistribution = {};
-
     progressData.forEach((record) => {
       const id = record.region_id || "NULL";
-
       regionDistribution[id] =
         (regionDistribution[id] || 0) + 1;
     });
@@ -1357,15 +1722,9 @@ export const getDashboardStats = async (
       regionDistribution
     );
 
-    // ---------------------------------------------------------
-    // 8. DEBUG STATUS DISTRIBUTION
-    // ---------------------------------------------------------
-
     const statusDistribution = {};
-
     progressData.forEach((record) => {
       const status = record.status || "NULL";
-
       statusDistribution[status] =
         (statusDistribution[status] || 0) + 1;
     });
@@ -1375,149 +1734,67 @@ export const getDashboardStats = async (
       statusDistribution
     );
 
-    // ---------------------------------------------------------
-    // 9. TOTAL OCCURRENCES
-    // ---------------------------------------------------------
+    const totalProgressRecords = progressData.length;
 
-    const totalProgressRecords =
-      progressData.length;
+    const closedRecords = progressData.filter(
+      (p) => p.status === "Closed"
+    ).length;
 
-    // ---------------------------------------------------------
-    // 10. STATUS COUNTS
-    // ---------------------------------------------------------
+    const submittedRecords = progressData.filter(
+      (p) => p.status === "Submitted/Under Review"
+    ).length;
 
-    const closedRecords =
-      progressData.filter(
-        (p) => p.status === "Closed"
-      ).length;
+    const openRecords = progressData.filter(
+      (p) => p.status === "Open"
+    ).length;
 
-    const submittedRecords =
-      progressData.filter(
-        (p) =>
-          p.status ===
-          "Submitted/Under Review"
-      ).length;
+    const overdueRecords = progressData.filter((p) => {
+      if (p.status === "Closed") {
+        return false;
+      }
 
-    const openRecords =
-      progressData.filter(
-        (p) => p.status === "Open"
-      ).length;
+      const dueDate = p.calculated_due_date || p.occurrence_date;
 
-    // ---------------------------------------------------------
-    // 11. OVERDUE
-    //
-    // Closed records are NEVER overdue.
-    // ---------------------------------------------------------
+      if (!dueDate) {
+        return false;
+      }
 
-    const overdueRecords =
-      progressData.filter((p) => {
-        if (p.status === "Closed") {
-          return false;
-        }
+      const dueDateObj = new Date(dueDate);
+      dueDateObj.setHours(0, 0, 0, 0);
 
-        const dueDate =
-          p.calculated_due_date ||
-          p.occurrence_date;
-
-        if (!dueDate) {
-          return false;
-        }
-
-        const dueDateObj =
-          new Date(dueDate);
-
-        dueDateObj.setHours(
-          0,
-          0,
-          0,
-          0
-        );
-
-        return dueDateObj < today;
-      }).length;
-
-    // ---------------------------------------------------------
-    // 12. NOT STARTED
-    //
-    // Open records that are NOT overdue.
-    // ---------------------------------------------------------
+      return dueDateObj < today;
+    }).length;
 
     const notStarted = Math.max(
       0,
       openRecords - overdueRecords
     );
 
-    // ---------------------------------------------------------
-    // 13. UNIQUE OBLIGATIONS
-    // ---------------------------------------------------------
+    const uniqueObligationIds = new Set(
+      progressData.map((p) => p.obligation_id)
+    );
 
-    const uniqueObligationIds =
-      new Set(
-        progressData.map(
-          (p) => p.obligation_id
-        )
-      );
+    const totalUniqueObligations = uniqueObligationIds.size;
 
-    const totalUniqueObligations =
-      uniqueObligationIds.size;
+    const overallCompliance = totalProgressRecords > 0
+      ? Number(((closedRecords / totalProgressRecords) * 100).toFixed(1))
+      : 0;
 
-    // ---------------------------------------------------------
-    // 14. OVERALL COMPLIANCE
-    // ---------------------------------------------------------
-
-    const overallCompliance =
-      totalProgressRecords > 0
-        ? Number(
-            (
-              (closedRecords /
-                totalProgressRecords) *
-              100
-            ).toFixed(1)
-          )
-        : 0;
-
-    // ---------------------------------------------------------
-    // 15. AUDIT READINESS
-    // ---------------------------------------------------------
-
-    const auditReadiness =
-      totalProgressRecords > 0
-        ? Number(
-            (
-              ((closedRecords +
-                submittedRecords) /
-                totalProgressRecords) *
-              100
-            ).toFixed(1)
-          )
-        : 0;
-
-    // ---------------------------------------------------------
-    // 16. WEIGHTED COMPLIANCE
-    // ---------------------------------------------------------
+    const auditReadiness = totalProgressRecords > 0
+      ? Number(((closedRecords + submittedRecords) / totalProgressRecords * 100).toFixed(1))
+      : 0;
 
     const obligationsMap = {};
-
-    (obligations || []).forEach(
-      (obligation) => {
-        obligationsMap[
-          obligation.obligation_id
-        ] =
-          Number(
-            obligation.compliance_weight
-          ) || 1;
-      }
-    );
+    (obligations || []).forEach((obligation) => {
+      obligationsMap[obligation.obligation_id] =
+        Number(obligation.compliance_weight) || 1;
+    });
 
     let totalWeight = 0;
     let achievedWeight = 0;
 
     progressData.forEach((progress) => {
-      const weight =
-        obligationsMap[
-          progress.obligation_id
-        ] || 1;
-
+      const weight = obligationsMap[progress.obligation_id] || 1;
       totalWeight += weight;
 
       if (progress.status === "Closed") {
@@ -1525,260 +1802,108 @@ export const getDashboardStats = async (
       }
     });
 
-    const overallWeightedCompliance =
-      totalWeight > 0
-        ? Number(
-            (
-              (achievedWeight /
-                totalWeight) *
-              100
-            ).toFixed(1)
-          )
-        : 0;
+    const overallWeightedCompliance = totalWeight > 0
+      ? Number((achievedWeight / totalWeight * 100).toFixed(1))
+      : 0;
 
-    // ---------------------------------------------------------
-    // 17. EVIDENCE COMPLETION
-    // ---------------------------------------------------------
+    const progressWithEvidence = progressData.filter(
+      (p) => p.evidence_id !== null && p.evidence_id !== undefined
+    ).length;
 
-    const progressWithEvidence =
-      progressData.filter(
-        (p) =>
-          p.evidence_id !== null &&
-          p.evidence_id !== undefined
-      ).length;
+    const evidenceCompletion = totalProgressRecords > 0
+      ? Number((progressWithEvidence / totalProgressRecords * 100).toFixed(1))
+      : 0;
 
-    const evidenceCompletion =
-      totalProgressRecords > 0
-        ? Number(
-            (
-              (progressWithEvidence /
-                totalProgressRecords) *
-              100
-            ).toFixed(1)
-          )
-        : 0;
+    const mandatoryObligationIds = new Set(
+      (obligations || [])
+        .filter((o) => o.mandatory === true)
+        .map((o) => o.obligation_id)
+    );
 
-    // ---------------------------------------------------------
-    // 18. MANDATORY OBLIGATIONS
-    //
-    // Count only mandatory obligations that actually
-    // exist in this dashboard's progress records.
-    // ---------------------------------------------------------
-
-    const mandatoryObligationIds =
-      new Set(
-        (obligations || [])
-          .filter(
-            (o) => o.mandatory === true
-          )
-          .map(
-            (o) => o.obligation_id
-          )
-      );
-
-    const mandatoryObligations =
-      [
-        ...uniqueObligationIds
-      ].filter(
-        (id) =>
-          mandatoryObligationIds.has(id)
-      ).length;
-
-    // ---------------------------------------------------------
-    // 19. REGION TARGET
-    // ---------------------------------------------------------
+    const mandatoryObligations = [...uniqueObligationIds].filter(
+      (id) => mandatoryObligationIds.has(id)
+    ).length;
 
     let regionsBelowTarget = 0;
     let regionsTotal = 0;
 
     if (isAdmin) {
-      // -------------------------------------------------------
-      // ADMIN
-      // -------------------------------------------------------
-
-      const {
-        data: allRegions,
-        error: regionsError
-      } = await supabase
+      const { data: allRegions, error: regionsError } = await supabase
         .from("regions")
         .select("id, name");
 
       if (!regionsError && allRegions) {
-        regionsTotal =
-          allRegions.length;
+        regionsTotal = allRegions.length;
 
         for (const region of allRegions) {
-          const regionProgress =
-            progressData.filter(
-              (p) =>
-                p.region_id ===
-                region.id
-            );
-
-          const regionTotal =
-            regionProgress.length;
-
-          const regionClosed =
-            regionProgress.filter(
-              (p) =>
-                p.status === "Closed"
-            ).length;
-
-          const regionCompliance =
-            regionTotal > 0
-              ? (regionClosed /
-                  regionTotal) *
-                100
-              : 0;
-
-          console.log(
-            `🌍 ${region.name}: ${regionTotal} total | ${regionClosed} closed | ${regionCompliance.toFixed(
-              1
-            )}%`
+          const regionProgress = progressData.filter(
+            (p) => p.region_id === region.id
           );
 
-          if (
-            regionTotal > 0 &&
-            regionCompliance < 80
-          ) {
+          const regionTotal = regionProgress.length;
+          const regionClosed = regionProgress.filter(
+            (p) => p.status === "Closed"
+          ).length;
+
+          const regionCompliance = regionTotal > 0
+            ? (regionClosed / regionTotal) * 100
+            : 0;
+
+          console.log(
+            `🌍 ${region.name}: ${regionTotal} total | ${regionClosed} closed | ${regionCompliance.toFixed(1)}%`
+          );
+
+          if (regionTotal > 0 && regionCompliance < 80) {
             regionsBelowTarget++;
           }
         }
       }
     } else {
-      // -------------------------------------------------------
-      // REGIONAL USER
-      // -------------------------------------------------------
-
       regionsTotal = 1;
-
-      if (
-        totalProgressRecords > 0
-      ) {
-        const regionCompliance =
-          (closedRecords /
-            totalProgressRecords) *
-          100;
-
-        if (
-          regionCompliance < 80
-        ) {
+      if (totalProgressRecords > 0) {
+        const regionCompliance = (closedRecords / totalProgressRecords) * 100;
+        if (regionCompliance < 80) {
           regionsBelowTarget = 1;
         }
       }
     }
 
-    // ---------------------------------------------------------
-    // 20. HIGH-RISK GAPS
-    // ---------------------------------------------------------
-
-    const highRiskGaps =
-      overdueRecords;
-
-    // ---------------------------------------------------------
-    // 21. FINAL RESULT
-    // ---------------------------------------------------------
+    const highRiskGaps = overdueRecords;
 
     const result = {
-      // Use weighted compliance when available
-      overallCompliance:
-        totalWeight > 0
-          ? overallWeightedCompliance
-          : overallCompliance,
-
+      overallCompliance: totalWeight > 0 ? overallWeightedCompliance : overallCompliance,
       auditReadiness,
-
-      // Unique obligations
-      totalObligations:
-        totalUniqueObligations,
-
-      // Status counts are occurrences
+      totalObligations: totalUniqueObligations,
       completed: closedRecords,
-
       pending: openRecords,
-
       overdue: overdueRecords,
-
       inProgress: submittedRecords,
-
       notStarted,
-
       highRiskGaps,
-
       regionsBelowTarget,
-
       regionsTotal,
-
       evidenceCompletion,
-
       mandatoryObligations,
-
-      // Actual number of progress/occurrence records
-      totalOccurrences:
-        totalProgressRecords
+      totalOccurrences: totalProgressRecords
     };
 
-    // ---------------------------------------------------------
-    // 22. FINAL DEBUG
-    // ---------------------------------------------------------
-
     console.log(
       "================================================="
     );
-
-    console.log(
-      "✅ [DashboardStats] FINAL RESULT"
-    );
-
-    console.log(
-      "Region:",
-      isAdmin
-        ? "ALL REGIONS"
-        : userRegion
-    );
-
-    console.log(
-      "Total:",
-      result.totalOccurrences
-    );
-
-    console.log(
-      "Closed:",
-      result.completed
-    );
-
-    console.log(
-      "Submitted:",
-      result.inProgress
-    );
-
-    console.log(
-      "Open:",
-      result.pending
-    );
-
-    console.log(
-      "Overdue:",
-      result.overdue
-    );
-
-    console.log(
-      "Evidence:",
-      result.evidenceCompletion + "%"
-    );
-
-    console.log(
-      "================================================="
-    );
+    console.log("✅ [DashboardStats] FINAL RESULT");
+    console.log("Region:", isAdmin ? "ALL REGIONS" : userRegion);
+    console.log("Total:", result.totalOccurrences);
+    console.log("Closed:", result.completed);
+    console.log("Submitted:", result.inProgress);
+    console.log("Open:", result.pending);
+    console.log("Overdue:", result.overdue);
+    console.log("Evidence:", result.evidenceCompletion + "%");
+    console.log("=================================================");
 
     return result;
 
   } catch (error) {
-    console.error(
-      "❌ [DashboardStats] ERROR:",
-      error
-    );
-
+    console.error("❌ [DashboardStats] ERROR:", error);
     return {
       overallCompliance: 0,
       auditReadiness: 0,
@@ -1802,10 +1927,6 @@ export const getDashboardStats = async (
 // COMPLIANCE BY DOMAIN
 // ============================================================
 
-// ============================================================
-// COMPLIANCE BY DOMAIN - FIXED FOR ADMIN
-// ============================================================
-
 export const getComplianceByDomain = async (userRegion = null, isAdmin = false) => {
   try {
     console.log('🔍 [ComplianceByDomain] ========== START ==========');
@@ -1817,7 +1938,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
       console.log('🔍 [ComplianceByDomain] Region ID:', regionId);
     }
 
-    // Fetch ALL obligations with their domains and compliance weights
     console.log('🔍 [ComplianceByDomain] Fetching all obligations...');
     const { data: obligations, error: obligationsError } = await supabase
       .from('compliance_obligations')
@@ -1835,11 +1955,9 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
       return { domains: [], compliance: [] };
     }
 
-    // Get all obligation IDs
     const obligationIds = obligations.map(o => o.obligation_id);
     console.log(`📋 [ComplianceByDomain] Obligation IDs: ${obligationIds.length} total`);
 
-    // Fetch progress records with pagination
     console.log('🔍 [ComplianceByDomain] Fetching progress records...');
     const PAGE_SIZE = 1000;
     let allProgressData = [];
@@ -1880,24 +1998,19 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
 
     console.log(`📊 [ComplianceByDomain] Found ${allProgressData?.length || 0} total progress records`);
 
-    // Filter progress records to only include those for our obligations
     const obligationIdSet = new Set(obligationIds);
     const progressData = allProgressData?.filter(p => obligationIdSet.has(p.obligation_id)) || [];
     
     console.log(`📊 [ComplianceByDomain] Filtered to ${progressData.length} progress records for our obligations`);
 
-    // For ADMIN: We need to check if ANY region has the obligation as 'Closed'
-    // For REGIONAL: We only check the specific region
     const latestStatusMap = {};
     
     if (progressData) {
       console.log('🔍 [ComplianceByDomain] Building latest status map...');
       
       if (isAdmin) {
-        // ADMIN: For each obligation, if ANY region has it closed, mark it as closed
         console.log('👑 [ComplianceByDomain] Admin mode - checking all regions for closed status');
         
-        // Group by obligation_id to see all statuses across regions
         const obligationStatuses = {};
         progressData.forEach(p => {
           if (!obligationStatuses[p.obligation_id]) {
@@ -1910,13 +2023,10 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
           });
         });
 
-        // For each obligation, check if ANY region has it closed
         for (const [obligationId, statuses] of Object.entries(obligationStatuses)) {
-          // Check if any status is 'Closed'
           const hasClosed = statuses.some(s => s.status === 'Closed');
           
           if (hasClosed) {
-            // Find the most recent closed record
             const closedRecords = statuses.filter(s => s.status === 'Closed');
             const mostRecentClosed = closedRecords.reduce((a, b) => 
               new Date(a.date) > new Date(b.date) ? a : b
@@ -1929,7 +2039,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
             };
             console.log(`📊 [ComplianceByDomain] ✅ ${obligationId} is CLOSED in at least one region`);
           } else {
-            // Get the most recent status (not closed)
             const mostRecent = statuses.reduce((a, b) => 
               new Date(a.date) > new Date(b.date) ? a : b
             );
@@ -1942,7 +2051,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
           }
         }
       } else {
-        // REGIONAL: Only check the specific region
         progressData.forEach(p => {
           const obligationId = p.obligation_id;
           const current = latestStatusMap[obligationId];
@@ -1973,7 +2081,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
 
     console.log(`📊 [ComplianceByDomain] Latest status map has ${Object.keys(latestStatusMap).length} entries`);
 
-    // Group by domain and calculate compliance
     const domainMap = {};
     
     obligations.forEach(o => {
@@ -2004,7 +2111,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
       }
     });
 
-    // Calculate compliance percentage for each domain with decimals
     const domains = [];
     const compliance = [];
     const details = {};
@@ -2031,7 +2137,6 @@ export const getComplianceByDomain = async (userRegion = null, isAdmin = false) 
       };
     }
 
-    // Sort by compliance percentage (highest first)
     const sortedIndices = domains.map((_, i) => i).sort((a, b) => compliance[b] - compliance[a]);
     const sortedDomains = sortedIndices.map(i => domains[i]);
     const sortedCompliance = sortedIndices.map(i => compliance[i]);
@@ -2337,6 +2442,7 @@ export const createProgressRecord = async (obligationId, regionId, occurrenceDat
         occurrence_date: occurrenceDate,
         calculated_due_date: calculatedDueDate.toISOString().split('T')[0],
         status: status,
+        approval_level: 'regional',
         comments: comments,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
@@ -2364,6 +2470,16 @@ export default {
   generateOccurrences,
   getOccurrencesForMonth,
   updateOccurrenceStatus,
+  // Two-level approval functions
+  submitForRegionalApproval,
+  managerApprove,
+  managerReject,
+  adminFinalApprove,
+  adminReject,
+  getManagerPendingApprovals,
+  getAdminPendingApprovals,
+  getApprovalHistory,
+  // Legacy approval functions
   getPendingApprovals,
   getApprovedOccurrences,
   approveOccurrence,

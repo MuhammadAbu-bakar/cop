@@ -4,19 +4,31 @@ import { supabase } from './supabase'
 export const USER_ROLES = {
   ADMIN: 'admin',
   REGIONAL_USER: 'regional_user',
+  REGIONAL_MANAGER: 'regional_manager',  // NEW: Regional Manager role
   MANAGEMENT: 'management',
   REVIEWER: 'reviewer'
 }
 
 // Define user roles and regions by email
 const USER_CONFIG_BY_EMAIL = {
+  // Admin
   'admin@compliance.com': { role: 'admin', region_name: null, region_code: null },
+  
+  // Regional Users
   'c1@compliance.com': { role: 'regional_user', region_name: 'Region C1', region_code: 'C1' },
   'c2@compliance.com': { role: 'regional_user', region_name: 'Region C2', region_code: 'C2' },
   'c3@compliance.com': { role: 'regional_user', region_name: 'Region C3', region_code: 'C3' },
   'c4@compliance.com': { role: 'regional_user', region_name: 'Region C4', region_code: 'C4' },
   'c5@compliance.com': { role: 'regional_user', region_name: 'Region C5', region_code: 'C5' },
   'c6@compliance.com': { role: 'regional_user', region_name: 'Region C6', region_code: 'C6' },
+  
+  // Regional Managers - Each region has a manager
+  'manager-c1@compliance.com': { role: 'regional_manager', region_name: 'Region C1', region_code: 'C1' },
+  'manager-c2@compliance.com': { role: 'regional_manager', region_name: 'Region C2', region_code: 'C2' },
+  'manager-c3@compliance.com': { role: 'regional_manager', region_name: 'Region C3', region_code: 'C3' },
+  'manager-c4@compliance.com': { role: 'regional_manager', region_name: 'Region C4', region_code: 'C4' },
+  'manager-c5@compliance.com': { role: 'regional_manager', region_name: 'Region C5', region_code: 'C5' },
+  'manager-c6@compliance.com': { role: 'regional_manager', region_name: 'Region C6', region_code: 'C6' },
 }
 
 // Sign up
@@ -340,6 +352,10 @@ export const updateUserProfile = async (userData) => {
   return { data, error }
 }
 
+// ============================================================
+// ROLE CHECK FUNCTIONS
+// ============================================================
+
 // Check if user has specific role
 export const hasRole = (user, role) => {
   if (!user) return false
@@ -352,6 +368,16 @@ export const isAdmin = (user) => {
   return hasRole(user, USER_ROLES.ADMIN)
 }
 
+// Check if user has regional manager role
+export const isRegionalManager = (user) => {
+  return hasRole(user, USER_ROLES.REGIONAL_MANAGER)
+}
+
+// Check if user has regional user role (non-manager)
+export const isRegionalUser = (user) => {
+  return hasRole(user, USER_ROLES.REGIONAL_USER)
+}
+
 // Check if user has management role
 export const isManagement = (user) => {
   return hasRole(user, USER_ROLES.MANAGEMENT)
@@ -360,6 +386,47 @@ export const isManagement = (user) => {
 // Check if user has reviewer role
 export const isReviewer = (user) => {
   return hasRole(user, USER_ROLES.REVIEWER)
+}
+
+// Check if user can approve based on role and approval level
+export const canApproveAtLevel = (user, approvalLevel) => {
+  if (!user) return false;
+  const role = user.role || USER_ROLES.REGIONAL_USER;
+  
+  // Admin can approve at any level
+  if (role === USER_ROLES.ADMIN) {
+    return true;
+  }
+  
+  // Regional Manager can approve regional submissions
+  if (role === USER_ROLES.REGIONAL_MANAGER && approvalLevel === 'regional') {
+    return true;
+  }
+  
+  return false;
+}
+
+// Check if user can reject based on role and approval level
+export const canRejectAtLevel = (user, approvalLevel) => {
+  if (!user) return false;
+  const role = user.role || USER_ROLES.REGIONAL_USER;
+  
+  // Admin can reject manager-approved submissions
+  if (role === USER_ROLES.ADMIN && approvalLevel === 'manager') {
+    return true;
+  }
+  
+  // Regional Manager can reject regional submissions
+  if (role === USER_ROLES.REGIONAL_MANAGER && approvalLevel === 'regional') {
+    return true;
+  }
+  
+  return false;
+}
+
+// Get user's role as string
+export const getUserRole = (user) => {
+  return user?.role || USER_ROLES.REGIONAL_USER;
 }
 
 // Get user's region
@@ -403,5 +470,107 @@ export const getRegionCodeByName = async (regionName) => {
   } catch (error) {
     console.error('Error fetching region code:', error);
     return null;
+  }
+}
+
+// Get user's region ID from profile
+export const getUserRegionId = async (user) => {
+  if (!user) return null;
+  
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('region_id')
+      .eq('id', user.id)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user region ID:', error);
+      return null;
+    }
+    
+    return data?.region_id || null;
+  } catch (error) {
+    console.error('Error in getUserRegionId:', error);
+    return null;
+  }
+}
+
+// Get user's region name from profile
+export const getUserRegionName = async (user) => {
+  if (!user) return null;
+  
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('region_name')
+      .eq('id', user.id)
+      .single();
+    
+    if (error) {
+      console.error('Error fetching user region name:', error);
+      return null;
+    }
+    
+    return data?.region_name || null;
+  } catch (error) {
+    console.error('Error in getUserRegionName:', error);
+    return null;
+  }
+}
+
+// Get all regional managers for a region
+export const getRegionalManagersByRegion = async (regionId) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('region_id', regionId)
+      .eq('role', USER_ROLES.REGIONAL_MANAGER);
+    
+    if (error) {
+      console.error('Error fetching regional managers:', error);
+      return { data: [], error };
+    }
+    
+    return { data: data || [], error: null };
+  } catch (error) {
+    console.error('Error in getRegionalManagersByRegion:', error);
+    return { data: [], error };
+  }
+}
+
+// Get all regional users for a region (excluding managers)
+export const getRegionalUsersByRegion = async (regionId) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('*')
+      .eq('region_id', regionId)
+      .eq('role', USER_ROLES.REGIONAL_USER);
+    
+    if (error) {
+      console.error('Error fetching regional users:', error);
+      return { data: [], error };
+    }
+    
+    return { data: data || [], error: null };
+  } catch (error) {
+    console.error('Error in getRegionalUsersByRegion:', error);
+    return { data: [], error };
+  }
+}
+
+// Check if user is a regional manager for their region
+export const isManagerForRegion = async (user, regionId) => {
+  if (!user) return false;
+  if (!isRegionalManager(user)) return false;
+  
+  try {
+    const userRegionId = await getUserRegionId(user);
+    return userRegionId === regionId;
+  } catch (error) {
+    console.error('Error in isManagerForRegion:', error);
+    return false;
   }
 }

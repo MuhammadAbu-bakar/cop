@@ -1,10 +1,16 @@
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../api/supabase";
 import { 
-  getPendingApprovals, 
-  getApprovedOccurrences,
+  getPendingApprovals,
+  getManagerPendingApprovals,
+  getAdminPendingApprovals,
+  managerApprove,
+  managerReject,
+  adminFinalApprove,
+  adminReject,
+  getApprovalHistory,
   approveOccurrence,
   rejectOccurrence 
 } from "../../api/compliance";
@@ -13,11 +19,15 @@ import { toast } from 'react-toastify';
 const Approvals = () => {
   const navigate = useNavigate();
   const { profile } = useAuth();
-  const isAdmin = profile?.role === "admin";
+  const userRole = profile?.role || "regional_user";
+  const isAdmin = userRole === "admin";
+  const isManager = userRole === "regional_manager";
   const userRegion = profile?.region_name || null;
   
   const [loading, setLoading] = useState(true);
   const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [managerApprovals, setManagerApprovals] = useState([]);
+  const [adminApprovals, setAdminApprovals] = useState([]);
   const [approvedOccurrences, setApprovedOccurrences] = useState([]);
   const [selectedTab, setSelectedTab] = useState("todo");
   const [processingId, setProcessingId] = useState(null);
@@ -32,6 +42,9 @@ const Approvals = () => {
   const [showEvidenceModal, setShowEvidenceModal] = useState(false);
   const [regionMap, setRegionMap] = useState({});
   const [obligationMap, setObligationMap] = useState({});
+  const [viewingApprovalHistory, setViewingApprovalHistory] = useState(null);
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const [approvalHistory, setApprovalHistory] = useState(null);
 
   useEffect(() => {
     fetchRegions();
@@ -78,53 +91,202 @@ const Approvals = () => {
     }
   };
 
-  const fetchApprovalsData = async () => {
-    setLoading(true);
-    try {
-      const [pendingRes, approvedRes] = await Promise.all([
-        getPendingApprovals(userRegion, isAdmin),
-        getApprovedOccurrences(userRegion, isAdmin)
-      ]);
+ const fetchApprovalsData = async () => {
+  setLoading(true);
+  try {
+    console.log('=========================================');
+    console.log('🔍 [APPROVALS] FETCHING DATA');
+    console.log('👤 User Role:', userRole);
+    console.log('📍 User Region:', userRegion);
+    console.log('👑 Is Admin:', isAdmin);
+    console.log('👔 Is Manager:', isManager);
+    console.log('=========================================');
 
-      if (pendingRes.error) throw pendingRes.error;
-      if (approvedRes.error) throw approvedRes.error;
+    let managerPending = [];
+    let adminPending = [];
+    let allPending = [];
+    let approved = [];
 
-      console.log('🔍 [DEBUG] Raw Pending Approvals:', JSON.stringify(pendingRes.data, null, 2));
-      console.log('🔍 [DEBUG] Raw Approved Occurrences:', JSON.stringify(approvedRes.data, null, 2));
+    // Fetch based on user role
+    if (isManager) {
+      console.log('👔 Fetching as Regional Manager for region:', userRegion);
+      
+      // Direct query for pending approvals
+      const regionId = await getRegionId(userRegion);
+      console.log('📍 Manager Region ID from getRegionId:', regionId);
+      
+      if (regionId) {
+        // Get PENDING approvals
+        const { data: pendingData, error: pendingError } = await supabase
+          .from('compliance_progress')
+          .select(`
+            *,
+            region:regions(id, name, code),
+            evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+          `)
+          .eq('status', 'Submitted/Under Review')
+          .eq('approval_level', 'regional')
+          .eq('region_id', regionId)
+          .order('updated_at', { ascending: false });
 
-      // Process pending approvals to add region name
-      const processedPending = await Promise.all((pendingRes.data || []).map(async (item) => {
-        const regionName = await getRegionName(item);
-        const obligationDetails = await getObligationDetails(item.obligation_id);
-        return {
-          ...item,
-          region_name: regionName,
-          obligation: obligationDetails || item.obligation
-        };
-      }));
+        if (pendingError) {
+          console.error('❌ Pending query error:', pendingError);
+        } else {
+          console.log(`✅ Pending: ${pendingData?.length || 0} records`);
+          managerPending = pendingData || [];
+        }
 
-      const processedApproved = await Promise.all((approvedRes.data || []).map(async (item) => {
-        const regionName = await getRegionName(item);
-        const obligationDetails = await getObligationDetails(item.obligation_id);
-        return {
-          ...item,
-          region_name: regionName,
-          obligation: obligationDetails || item.obligation
-        };
-      }));
+        // Get APPROVED (Closed) approvals for this region
+        const { data: approvedData, error: approvedError } = await supabase
+          .from('compliance_progress')
+          .select(`
+            *,
+            region:regions(id, name, code),
+            evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+          `)
+          .eq('status', 'Closed')
+          .eq('region_id', regionId)
+          .order('updated_at', { ascending: false });
 
-      console.log('🔍 [DEBUG] Processed Pending with regions:', processedPending.map(p => ({ id: p.id, region: p.region_name })));
-      console.log('🔍 [DEBUG] Processed Approved with regions:', processedApproved.map(p => ({ id: p.id, region: p.region_name })));
+        if (approvedError) {
+          console.error('❌ Approved query error:', approvedError);
+        } else {
+          console.log(`✅ Approved: ${approvedData?.length || 0} records`);
+          approved = approvedData || [];
+        }
+      }
+      
+      allPending = managerPending;
+      
+    } else if (isAdmin) {
+      console.log('👑 Fetching as Admin - all regions');
+      
+      // Get PENDING approvals (all levels)
+      const { data: pendingData, error: pendingError } = await supabase
+        .from('compliance_progress')
+        .select(`
+          *,
+          region:regions(id, name, code),
+          evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+        `)
+        .in('status', ['Submitted/Under Review'])
+        .order('updated_at', { ascending: false });
 
-      setPendingApprovals(processedPending);
-      setApprovedOccurrences(processedApproved);
-    } catch (error) {
-      console.error("Error fetching approvals data:", error);
-      toast.error("Failed to load approvals data");
-    } finally {
-      setLoading(false);
+      if (pendingError) {
+        console.error('❌ Pending query error:', pendingError);
+      } else {
+        console.log(`✅ Pending: ${pendingData?.length || 0} records`);
+        allPending = pendingData || [];
+      }
+
+      // Get APPROVED (Closed) approvals for all regions
+      const { data: approvedData, error: approvedError } = await supabase
+        .from('compliance_progress')
+        .select(`
+          *,
+          region:regions(id, name, code),
+          evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+        `)
+        .eq('status', 'Closed')
+        .order('updated_at', { ascending: false });
+
+      if (approvedError) {
+        console.error('❌ Approved query error:', approvedError);
+      } else {
+        console.log(`✅ Approved: ${approvedData?.length || 0} records`);
+        approved = approvedData || [];
+      }
+      
+    } else {
+      console.log('👤 Fetching as Regional User for region:', userRegion);
+      
+      const regionId = await getRegionId(userRegion);
+      
+      if (regionId) {
+        // Get PENDING approvals
+        const { data: pendingData, error: pendingError } = await supabase
+          .from('compliance_progress')
+          .select(`
+            *,
+            region:regions(id, name, code),
+            evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+          `)
+          .eq('status', 'Submitted/Under Review')
+          .eq('region_id', regionId)
+          .order('updated_at', { ascending: false });
+
+        if (pendingError) {
+          console.error('❌ Pending query error:', pendingError);
+        } else {
+          console.log(`✅ Pending: ${pendingData?.length || 0} records`);
+          allPending = pendingData || [];
+        }
+
+        // Get APPROVED (Closed) approvals
+        const { data: approvedData, error: approvedError } = await supabase
+          .from('compliance_progress')
+          .select(`
+            *,
+            region:regions(id, name, code),
+            evidence:evidence!compliance_progress_evidence_id_fkey(id, file_name, file_url)
+          `)
+          .eq('status', 'Closed')
+          .eq('region_id', regionId)
+          .order('updated_at', { ascending: false });
+
+        if (approvedError) {
+          console.error('❌ Approved query error:', approvedError);
+        } else {
+          console.log(`✅ Approved: ${approvedData?.length || 0} records`);
+          approved = approvedData || [];
+        }
+      }
     }
-  };
+
+    console.log('🔍 [DEBUG] Raw Pending Approvals:', allPending.length);
+    console.log('🔍 [DEBUG] Raw Approved Occurrences:', approved.length);
+
+    // Process pending approvals to add region name and obligation details
+    const processedPending = await Promise.all((allPending || []).map(async (item) => {
+      const regionName = await getRegionName(item);
+      const obligationDetails = await getObligationDetails(item.obligation_id);
+      return {
+        ...item,
+        region_name: regionName,
+        obligation: obligationDetails || item.obligation
+      };
+    }));
+
+    const processedApproved = await Promise.all((approved || []).map(async (item) => {
+      const regionName = await getRegionName(item);
+      const obligationDetails = await getObligationDetails(item.obligation_id);
+      return {
+        ...item,
+        region_name: regionName,
+        obligation: obligationDetails || item.obligation
+      };
+    }));
+
+    setManagerApprovals(managerPending);
+    setAdminApprovals(adminPending);
+    setPendingApprovals(processedPending);
+    setApprovedOccurrences(processedApproved);
+    
+    console.log('✅ Approvals loaded:', {
+      managerPending: managerPending.length,
+      adminPending: adminPending.length,
+      totalPending: processedPending.length,
+      approved: processedApproved.length,
+      role: userRole
+    });
+    
+  } catch (error) {
+    console.error("Error fetching approvals data:", error);
+    toast.error("Failed to load approvals data");
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Helper function to get region name from occurrence
   const getRegionName = async (occurrence) => {
@@ -160,14 +322,6 @@ const Approvals = () => {
       }
     }
     
-    console.log('🔍 [DEBUG] Region not found for occurrence:', {
-      id: occurrence.id,
-      obligation_region: occurrence.obligation?.region,
-      occurrence_region_id: occurrence.region_id,
-      obligation_region_id: occurrence.obligation?.region_id,
-      obligation_id: occurrence.obligation_id
-    });
-    
     return "N/A";
   };
 
@@ -199,6 +353,85 @@ const Approvals = () => {
     }
   };
 
+  // Regional Manager Approve
+  const handleManagerApprove = async (occurrenceId) => {
+    setProcessingId(occurrenceId);
+    try {
+      const result = await managerApprove(occurrenceId);
+      if (result.error) throw result.error;
+      
+      toast.success("✅ Approved by Regional Manager! Waiting for Admin approval.");
+      await fetchApprovalsData();
+    } catch (error) {
+      console.error("Error in manager approval:", error);
+      toast.error("Failed to approve. Please try again.");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Regional Manager Reject
+  const handleManagerReject = async () => {
+    if (!selectedOccurrence) return;
+    
+    setProcessingId(selectedOccurrence.id);
+    try {
+      const result = await managerReject(selectedOccurrence.id, rejectReason);
+      if (result.error) throw result.error;
+      
+      toast.success("Occurrence rejected and sent back to regional user.");
+      setShowRejectModal(false);
+      setRejectReason("");
+      setSelectedOccurrence(null);
+      await fetchApprovalsData();
+    } catch (error) {
+      console.error("Error in manager rejection:", error);
+      toast.error("Failed to reject. Please try again.");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Admin Final Approve
+  const handleAdminFinalApprove = async (occurrenceId) => {
+    setProcessingId(occurrenceId);
+    try {
+      const result = await adminFinalApprove(occurrenceId);
+      if (result.error) throw result.error;
+      
+      toast.success("✅ Admin final approved! Occurrence closed.");
+      await fetchApprovalsData();
+    } catch (error) {
+      console.error("Error in admin final approval:", error);
+      toast.error("Failed to approve. Please try again.");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Admin Reject
+  const handleAdminReject = async () => {
+    if (!selectedOccurrence) return;
+    
+    setProcessingId(selectedOccurrence.id);
+    try {
+      const result = await adminReject(selectedOccurrence.id, rejectReason);
+      if (result.error) throw result.error;
+      
+      toast.success("Admin rejected - Sent back to Regional Manager.");
+      setShowRejectModal(false);
+      setRejectReason("");
+      setSelectedOccurrence(null);
+      await fetchApprovalsData();
+    } catch (error) {
+      console.error("Error in admin rejection:", error);
+      toast.error("Failed to reject. Please try again.");
+    } finally {
+      setProcessingId(null);
+    }
+  };
+
+  // Legacy Approve (for backward compatibility)
   const handleApprove = async (occurrenceId) => {
     setProcessingId(occurrenceId);
     try {
@@ -215,6 +448,7 @@ const Approvals = () => {
     }
   };
 
+  // Legacy Reject (for backward compatibility)
   const handleReject = async () => {
     if (!selectedOccurrence) return;
     
@@ -236,10 +470,26 @@ const Approvals = () => {
     }
   };
 
-  const openRejectModal = (occurrence) => {
-    setSelectedOccurrence(occurrence);
+  const openRejectModal = (occurrence, type = 'manager') => {
+    setSelectedOccurrence({ ...occurrence, rejectType: type });
     setRejectReason("");
     setShowRejectModal(true);
+  };
+
+  const handleViewApprovalHistory = async (occurrence) => {
+    setViewingApprovalHistory(occurrence);
+    try {
+      const result = await getApprovalHistory(occurrence.id);
+      if (!result.error) {
+        setApprovalHistory(result.data);
+        setShowHistoryModal(true);
+      } else {
+        toast.error('Failed to load approval history');
+      }
+    } catch (error) {
+      console.error('Error fetching approval history:', error);
+      toast.error('Failed to load approval history');
+    }
   };
 
   const handleDownloadEvidence = async (evidence) => {
@@ -281,6 +531,24 @@ const Approvals = () => {
       'Closed': "bg-green-100 text-green-800",
     };
     return badges[status] || "bg-gray-100 text-gray-800";
+  };
+
+  const getApprovalLevelBadge = (level) => {
+    const badges = {
+      'regional': 'bg-yellow-100 text-yellow-800',
+      'manager': 'bg-blue-100 text-blue-800',
+      'admin': 'bg-green-100 text-green-800',
+    };
+    return badges[level] || 'bg-gray-100 text-gray-800';
+  };
+
+  const getApprovalLevelLabel = (level) => {
+    const labels = {
+      'regional': '⏳ Regional Manager Review',
+      'manager': '⏳ Admin Review',
+      'admin': '✅ Final Approved'
+    };
+    return labels[level] || level;
   };
 
   const getTypeBadge = (frequency) => {
@@ -378,6 +646,53 @@ const Approvals = () => {
     const ext = getFileExtension(filename);
     const textExtensions = ['txt', 'csv', 'json', 'xml', 'html', 'css', 'js', 'ts', 'jsx', 'tsx'];
     return textExtensions.includes(ext);
+  };
+
+  // Check if user can approve this occurrence
+  const canApprove = (occurrence) => {
+    if (isManager && occurrence.approval_level === 'regional') {
+      return true;
+    }
+    if (isAdmin && occurrence.approval_level === 'manager') {
+      return true;
+    }
+    return false;
+  };
+
+  // Check if user can reject this occurrence
+  const canReject = (occurrence) => {
+    if (isManager && occurrence.approval_level === 'regional') {
+      return true;
+    }
+    if (isAdmin && occurrence.approval_level === 'manager') {
+      return true;
+    }
+    return false;
+  };
+
+  // Render approval step indicator - FIXED (removed React.Fragment)
+  const renderApprovalStepIndicator = (occurrence) => {
+    const steps = [
+      { level: 'regional', label: 'Regional Upload', completed: true },
+      { level: 'manager', label: 'Manager Approval', completed: occurrence.approval_level === 'manager' || occurrence.approval_level === 'admin' },
+      { level: 'admin', label: 'Admin Approval', completed: occurrence.approval_level === 'admin' }
+    ];
+
+    return (
+      <div className="flex items-center gap-2 mt-2 flex-wrap">
+        {steps.map((step, index) => (
+          <span key={step.level} className="flex items-center">
+            <span className={`w-3 h-3 rounded-full ${step.completed ? 'bg-green-500' : 'bg-gray-300'}`} />
+            <span className={`ml-1 text-xs ${step.completed ? 'text-green-700' : 'text-gray-500'}`}>
+              {step.label}
+            </span>
+            {index < steps.length - 1 && (
+              <span className="text-gray-300 text-xs mx-1">→</span>
+            )}
+          </span>
+        ))}
+      </div>
+    );
   };
 
   // Filter functions
@@ -509,9 +824,18 @@ const Approvals = () => {
               ? `${filteredPending.length} items pending approval`
               : `${filteredApproved.length} items approved`
             }
+            <span className="ml-2 inline-flex items-center">
+              <span className={`text-xs px-2 py-0.5 rounded-full ${
+                isAdmin ? 'bg-purple-100 text-purple-800' :
+                isManager ? 'bg-blue-100 text-blue-800' :
+                'bg-green-100 text-green-800'
+              }`}>
+                {isAdmin ? 'Admin' : isManager ? 'Regional Manager' : 'Regional User'}
+              </span>
+            </span>
             {!isAdmin && userRegion && (
               <span className="ml-2 inline-flex items-center">
-                <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
+                <span className="text-xs bg-gray-100 text-gray-700 px-2 py-0.5 rounded-full">
                   Region: {userRegion}
                 </span>
               </span>
@@ -519,11 +843,21 @@ const Approvals = () => {
             {isAdmin && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
-                  Admin - All Regions
+                  All Regions
                 </span>
               </span>
             )}
           </p>
+          {isManager && (
+            <p className="text-xs text-gray-400 mt-1">
+              You can approve regional submissions and send to Admin for final approval.
+            </p>
+          )}
+          {isAdmin && (
+            <p className="text-xs text-gray-400 mt-1">
+              You can final approve occurrences that have been approved by Regional Managers.
+            </p>
+          )}
         </div>
         <button
           onClick={fetchApprovalsData}
@@ -556,7 +890,7 @@ const Approvals = () => {
             >
               <option value="">All Regions</option>
               {regions.map((region) => (
-                <option key={region.code} value={region.name}>
+                <option key={region.id} value={region.name}>
                   {region.name}
                 </option>
               ))}
@@ -624,82 +958,112 @@ const Approvals = () => {
               const regionName = occurrence.region_name || occurrence.obligation?.region || "N/A";
               const dueDate = occurrence.calculated_due_date || occurrence.due_date;
               const occurrenceDate = occurrence.occurrence_date || occurrence.instance_date;
+              const approvalLevel = occurrence.approval_level || 'regional';
+              const canApproveThis = canApprove(occurrence);
+              const canRejectThis = canReject(occurrence);
               
               return (
-                <div key={occurrence.id} className="bg-white rounded-lg shadow p-4 sm:p-6 hover:shadow-md transition-shadow">
-                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-                    <div className="flex-1 w-full">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="text-base font-semibold text-gray-900">
-                          {occurrence.obligation?.obligation_name || "Unknown Obligation"}
-                        </h3>
-                        <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusBadge(occurrence.status)}`}>
-                          {occurrence.status}
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-500">
-                        {occurrence.obligation?.obligation_id || "N/A"} • {occurrence.obligation?.domain || "N/A"}
-                      </p>
-                      <div className="flex flex-wrap gap-2 mt-2">
-                        <span className={`px-2 py-0.5 text-xs rounded-full ${getTypeBadge(occurrence.obligation?.frequency)}`}>
-                          {occurrence.obligation?.frequency || "N/A"}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Region: {regionName}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Due: {formatDate(dueDate)}
-                        </span>
-                        <span className="text-xs text-gray-500">
-                          Occurrence: {formatDate(occurrenceDate)}
-                        </span>
-                      </div>
-                      
-                      {occurrence.comments && (
-                        <p className="text-sm text-gray-600 mt-2">
-                          <span className="font-medium">Comment:</span> {occurrence.comments}
-                        </p>
-                      )}
-                      
-                      {/* Evidence Display */}
-                      {occurrence.evidence && Array.isArray(occurrence.evidence) && occurrence.evidence.length > 0 ? (
-                        <div className="mt-2 space-y-2">
-                          {occurrence.evidence.map((evidenceItem) => renderEvidenceItem(evidenceItem))}
+                <div key={occurrence.id} className="bg-white rounded-lg shadow p-4 sm:p-6 hover:shadow-md transition-shadow border-l-4 border-yellow-400">
+                  <div className="flex flex-col gap-3">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="flex-1 w-full">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h3 className="text-base font-semibold text-gray-900">
+                            {occurrence.obligation?.obligation_name || "Unknown Obligation"}
+                          </h3>
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${getApprovalLevelBadge(approvalLevel)}`}>
+                            {getApprovalLevelLabel(approvalLevel)}
+                          </span>
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusBadge(occurrence.status)}`}>
+                            {occurrence.status}
+                          </span>
                         </div>
-                      ) : occurrence.evidence && !Array.isArray(occurrence.evidence) ? (
-                        renderEvidenceItem(occurrence.evidence)
-                      ) : null}
-                    </div>
-                    <div className="flex gap-2 w-full sm:w-auto">
-                      <button
-                        onClick={() => handleApprove(occurrence.id)}
-                        disabled={processingId === occurrence.id}
-                        className="flex-1 sm:flex-none bg-green-500 text-white px-4 py-2 rounded-md hover:bg-green-600 transition-colors disabled:opacity-50 text-sm flex items-center justify-center"
-                      >
-                        {processingId === occurrence.id ? (
-                          <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                          </svg>
-                        ) : (
-                          "Approve"
+                        <p className="text-sm text-gray-500">
+                          {occurrence.obligation?.obligation_id || "N/A"} • {occurrence.obligation?.domain || "N/A"}
+                        </p>
+                        <div className="flex flex-wrap gap-2 mt-2">
+                          <span className={`px-2 py-0.5 text-xs rounded-full ${getTypeBadge(occurrence.obligation?.frequency)}`}>
+                            {occurrence.obligation?.frequency || "N/A"}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            Region: {regionName}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            Due: {formatDate(dueDate)}
+                          </span>
+                          <span className="text-xs text-gray-500">
+                            Occurrence: {formatDate(occurrenceDate)}
+                          </span>
+                        </div>
+                        
+                        {/* Approval Step Indicator */}
+                        {renderApprovalStepIndicator(occurrence)}
+                        
+                        {occurrence.comments && (
+                          <p className="text-sm text-gray-600 mt-2">
+                            <span className="font-medium">Comment:</span> {occurrence.comments}
+                          </p>
                         )}
-                      </button>
-                      <button
-                        onClick={() => openRejectModal(occurrence)}
-                        disabled={processingId === occurrence.id}
-                        className="flex-1 sm:flex-none bg-red-500 text-white px-4 py-2 rounded-md hover:bg-red-600 transition-colors disabled:opacity-50 text-sm"
-                      >
-                        Reject
-                      </button>
+                        
+                        {/* Evidence Display */}
+                        {occurrence.evidence && Array.isArray(occurrence.evidence) && occurrence.evidence.length > 0 ? (
+                          <div className="mt-2 space-y-2">
+                            {occurrence.evidence.map((evidenceItem) => renderEvidenceItem(evidenceItem))}
+                          </div>
+                        ) : occurrence.evidence && !Array.isArray(occurrence.evidence) ? (
+                          renderEvidenceItem(occurrence.evidence)
+                        ) : null}
+                      </div>
+                      
+                      <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+                        {/* Approval History Button */}
+                        <button
+                          onClick={() => handleViewApprovalHistory(occurrence)}
+                          className="px-3 py-1.5 bg-gray-200 text-gray-700 text-xs rounded hover:bg-gray-300 transition-colors"
+                        >
+                          📋 History
+                        </button>
+                        
+                        {/* Approve Button */}
+                        {canApproveThis && (
+                          <button
+                            onClick={() => isManager ? handleManagerApprove(occurrence.id) : handleAdminFinalApprove(occurrence.id)}
+                            disabled={processingId === occurrence.id}
+                            className="px-4 py-1.5 bg-green-500 text-white text-xs rounded hover:bg-green-600 transition-colors disabled:opacity-50"
+                          >
+                            {processingId === occurrence.id ? (
+                              <svg className="animate-spin h-4 w-4" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                              </svg>
+                            ) : (
+                              isManager ? '✅ Approve & Send to Admin' : '✅ Final Approve'
+                            )}
+                          </button>
+                        )}
+                        
+                        {/* Reject Button */}
+                        {canRejectThis && (
+                          <button
+                            onClick={() => openRejectModal(occurrence, isManager ? 'manager' : 'admin')}
+                            disabled={processingId === occurrence.id}
+                            className="px-4 py-1.5 bg-red-500 text-white text-xs rounded hover:bg-red-600 transition-colors disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-400">
-                    <span>Submitted: {formatDateTime(occurrence.updated_at)}</span>
-                    <span>Occurrence: {formatDate(occurrenceDate)}</span>
-                    {occurrence.evidence?.uploaded_by && (
-                      <span>Uploaded by: {occurrence.evidence.uploaded_by}</span>
-                    )}
+                    <div className="pt-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-400">
+                      <span>Submitted: {formatDateTime(occurrence.updated_at)}</span>
+                      <span>Occurrence: {formatDate(occurrenceDate)}</span>
+                      {occurrence.manager_approved_by && (
+                        <span>Manager Approved: {formatDateTime(occurrence.manager_approved_at)}</span>
+                      )}
+                      {occurrence.admin_approved_by && (
+                        <span>Admin Approved: {formatDateTime(occurrence.admin_approved_at)}</span>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -724,6 +1088,7 @@ const Approvals = () => {
               const regionName = occurrence.region_name || occurrence.obligation?.region || "N/A";
               const dueDate = occurrence.calculated_due_date || occurrence.due_date;
               const occurrenceDate = occurrence.occurrence_date || occurrence.instance_date;
+              const approvalLevel = occurrence.approval_level || 'admin';
               
               return (
                 <div key={occurrence.id} className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-green-500 hover:shadow-md transition-shadow">
@@ -733,6 +1098,9 @@ const Approvals = () => {
                         <h3 className="text-base font-semibold text-gray-900">
                           {occurrence.obligation?.obligation_name || "Unknown Obligation"}
                         </h3>
+                        <span className={`px-2 py-0.5 text-xs rounded-full ${getApprovalLevelBadge(approvalLevel)}`}>
+                          {getApprovalLevelLabel(approvalLevel)}
+                        </span>
                         <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusBadge(occurrence.status)}`}>
                           {occurrence.status}
                         </span>
@@ -779,6 +1147,12 @@ const Approvals = () => {
                   <div className="mt-3 pt-3 border-t border-gray-100 flex flex-wrap gap-4 text-xs text-gray-400">
                     <span>Occurrence: {formatDate(occurrenceDate)}</span>
                     <span>Due: {formatDate(dueDate)}</span>
+                    {occurrence.manager_approved_by && (
+                      <span>Manager Approved: {formatDateTime(occurrence.manager_approved_at)}</span>
+                    )}
+                    {occurrence.admin_approved_by && (
+                      <span>Admin Approved: {formatDateTime(occurrence.admin_approved_at)}</span>
+                    )}
                     {occurrence.evidence?.uploaded_by && (
                       <span>Uploaded by: {occurrence.evidence.uploaded_by}</span>
                     )}
@@ -925,8 +1299,9 @@ const Approvals = () => {
                 Reject Approval
               </h3>
               <p className="text-sm text-gray-500 text-center mb-4">
-                Are you sure you want to reject "{selectedOccurrence.obligation?.obligation_name || 'this obligation'}"?
-                This will move it back to "Open" status.
+                {selectedOccurrence.rejectType === 'manager' 
+                  ? 'This will send the occurrence back to the regional user for revision.'
+                  : 'This will send the occurrence back to the Regional Manager for review.'}
               </p>
               <div className="mb-4">
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -942,7 +1317,7 @@ const Approvals = () => {
               </div>
               <div className="flex gap-3">
                 <button
-                  onClick={handleReject}
+                  onClick={selectedOccurrence.rejectType === 'manager' ? handleManagerReject : handleAdminReject}
                   disabled={processingId === selectedOccurrence.id}
                   className="flex-1 bg-red-500 text-white py-2 rounded-md hover:bg-red-600 transition-colors disabled:opacity-50 text-sm"
                 >
@@ -959,6 +1334,124 @@ const Approvals = () => {
                   Cancel
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Approval History Modal */}
+      {showHistoryModal && approvalHistory && viewingApprovalHistory && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900">
+                Approval History
+              </h3>
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setApprovalHistory(null);
+                  setViewingApprovalHistory(null);
+                }}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="p-4 overflow-y-auto max-h-[60vh]">
+              <div className="space-y-4">
+                {/* Regional Upload */}
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
+                    <svg className="h-4 w-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4 4m0 0L8 8m4-4v12" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <p className="text-sm font-medium text-gray-900">Evidence Uploaded</p>
+                    <p className="text-xs text-gray-500">Submitted for Regional Manager approval</p>
+                    <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.updated_at)}</p>
+                  </div>
+                </div>
+
+                {/* Manager Approval */}
+                {approvalHistory.manager_approved_by && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">Regional Manager Approved</p>
+                      <p className="text-xs text-gray-500">
+                        {approvalHistory.manager?.full_name || 'Manager'} • Waiting for Admin
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.manager_approved_at)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Admin Approval */}
+                {approvalHistory.admin_approved_by && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-gray-900">Admin Final Approved</p>
+                      <p className="text-xs text-gray-500">
+                        {approvalHistory.admin?.full_name || 'Admin'} • Occurrence Closed
+                      </p>
+                      <p className="text-xs text-gray-400 mt-1">{formatDateTime(approvalHistory.admin_approved_at)}</p>
+                    </div>
+                  </div>
+                )}
+
+                {!approvalHistory.manager_approved_by && approvalHistory.approval_level === 'regional' && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-yellow-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-yellow-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-yellow-700">⏳ Waiting for Regional Manager</p>
+                      <p className="text-xs text-gray-500">Awaiting manager review and approval</p>
+                    </div>
+                  </div>
+                )}
+
+                {approvalHistory.manager_approved_by && !approvalHistory.admin_approved_by && approvalHistory.approval_level === 'manager' && (
+                  <div className="flex items-start gap-3">
+                    <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                      <svg className="h-4 w-4 text-blue-600 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-sm font-medium text-blue-700">⏳ Waiting for Admin</p>
+                      <p className="text-xs text-gray-500">Awaiting admin final approval</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="p-4 border-t border-gray-200">
+              <button
+                onClick={() => {
+                  setShowHistoryModal(false);
+                  setApprovalHistory(null);
+                  setViewingApprovalHistory(null);
+                }}
+                className="w-full bg-gray-200 text-gray-700 py-2 rounded-md hover:bg-gray-300 transition-colors text-sm"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
