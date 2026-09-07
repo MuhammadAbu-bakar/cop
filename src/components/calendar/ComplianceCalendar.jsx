@@ -52,21 +52,30 @@ const ComplianceCalendar = () => {
       const quarter = Math.floor(month / 3);
       
       let startDate, endDate;
+      let startDateStr, endDateStr;
       
       if (view === "month") {
-        startDate = new Date(year, month, 1).toISOString().split('T')[0];
-        endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+        startDate = new Date(year, month, 1);
+        endDate = new Date(year, month + 1, 0);
+        startDateStr = startDate.toISOString().split('T')[0];
+        endDateStr = endDate.toISOString().split('T')[0];
       } else if (view === "quarter") {
         const startMonth = quarter * 3;
-        startDate = new Date(year, startMonth, 1).toISOString().split('T')[0];
-        endDate = new Date(year, startMonth + 3, 0).toISOString().split('T')[0];
+        startDate = new Date(year, startMonth, 1);
+        endDate = new Date(year, startMonth + 3, 0);
+        startDateStr = startDate.toISOString().split('T')[0];
+        endDateStr = endDate.toISOString().split('T')[0];
       } else { // year view
-        startDate = new Date(year, 0, 1).toISOString().split('T')[0];
-        endDate = new Date(year, 11, 31).toISOString().split('T')[0];
+        startDate = new Date(year, 0, 1);
+        endDate = new Date(year, 11, 31);
+        startDateStr = startDate.toISOString().split('T')[0];
+        endDateStr = endDate.toISOString().split('T')[0];
       }
 
+      console.log(`📅 Fetching data for period: ${startDateStr} to ${endDateStr}`);
+
       // ---------------------------------------------------------
-      // 1. QUERY compliance_progress WITH DATE FILTER
+      // 1. QUERY compliance_progress - Get ALL records for the period
       // ---------------------------------------------------------
       let progressQuery = supabase
         .from('compliance_progress')
@@ -84,17 +93,20 @@ const ComplianceCalendar = () => {
           created_at,
           updated_at
         `)
-        .gte('calculated_due_date', startDate)
-        .lte('calculated_due_date', endDate)
+        .gte('calculated_due_date', startDateStr)
+        .lte('calculated_due_date', endDateStr)
         .order('calculated_due_date', { ascending: true });
 
       // Filter by region for non-admin users
       if (!isAdmin && regionId) {
         progressQuery = progressQuery.eq('region_id', regionId);
+        console.log(`🔍 Filtering by region: ${userRegion} (${regionId})`);
       }
 
       const { data: progressData, error: progressError } = await progressQuery;
       if (progressError) throw progressError;
+
+      console.log(`📊 Found ${progressData?.length || 0} progress records for this period`);
 
       if (!progressData || progressData.length === 0) {
         setProgressRecords([]);
@@ -106,6 +118,7 @@ const ComplianceCalendar = () => {
       // 2. Get obligation details for these records
       // ---------------------------------------------------------
       const obligationIds = [...new Set(progressData.map(p => p.obligation_id))];
+      console.log(`📋 Found ${obligationIds.length} unique obligation IDs`);
       
       const { data: obligations, error: obligationsError } = await supabase
         .from('compliance_obligations')
@@ -142,20 +155,15 @@ const ComplianceCalendar = () => {
       // ---------------------------------------------------------
       // 4. Process data - combine progress with obligation details
       // ---------------------------------------------------------
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       const processedData = progressData.map(progress => {
         const obligation = obligationMap[progress.obligation_id] || {};
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
         const dueDate = new Date(progress.calculated_due_date);
         dueDate.setHours(0, 0, 0, 0);
         const isOverdue = dueDate < today && progress.status !== "Closed";
         
-        // Map status to calendar-friendly status
-        let displayStatus = progress.status;
-        if (isOverdue && progress.status === "Open") {
-          displayStatus = "Overdue";
-        }
-
         return {
           ...progress,
           // Obligation details
@@ -179,11 +187,14 @@ const ComplianceCalendar = () => {
           progress_status: progress.status,
           // Calculated fields
           isOverdue,
-          displayStatus,
-          due_date: progress.calculated_due_date
+          due_date: progress.calculated_due_date,
+          // Store the month for grouping
+          due_month: dueDate.getMonth(),
+          due_year: dueDate.getFullYear()
         };
       });
 
+      console.log(`✅ Processed ${processedData.length} records for display`);
       setProgressRecords(processedData);
     } catch (error) {
       console.error("Error fetching calendar data:", error);
@@ -192,16 +203,20 @@ const ComplianceCalendar = () => {
     }
   };
 
-  // Calculate stats for the current view
+  // Calculate stats for the current view - ONLY for the current period
   const getViewStats = () => {
     const total = progressRecords.length;
     const completed = progressRecords.filter(o => o.status === "Closed").length;
     const overdue = progressRecords.filter(o => o.isOverdue).length;
+    const open = progressRecords.filter(o => 
+      o.status === "Open" && !o.isOverdue
+    ).length;
     const inProgress = progressRecords.filter(o => 
       o.status === "Submitted/Under Review" && !o.isOverdue
     ).length;
     
-    return { total, completed, overdue, inProgress };
+    console.log(`📊 Stats: Total=${total}, Closed=${completed}, Overdue=${overdue}, Open=${open}`);
+    return { total, completed, overdue, open, inProgress };
   };
 
   const getTypeBadge = (frequency) => {
@@ -218,7 +233,8 @@ const ComplianceCalendar = () => {
   };
 
   const getStatusBadge = (status, isOverdue) => {
-    if (isOverdue || status === "Overdue") {
+    // Overdue takes precedence
+    if (isOverdue) {
       return "bg-red-100 text-red-800";
     }
     
@@ -281,15 +297,20 @@ const ComplianceCalendar = () => {
 
   // Get records for a specific date - uses calculated_due_date
   const getRecordsForDate = (year, month, day) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    
-    return progressRecords.filter((record) => {
+    const filtered = progressRecords.filter((record) => {
       if (!record.due_date) return false;
       const dueDate = new Date(record.due_date);
       return dueDate.getFullYear() === year && 
              dueDate.getMonth() === month && 
              dueDate.getDate() === day;
     });
+    
+    // Log to debug
+    if (filtered.length > 0) {
+      console.log(`📅 Found ${filtered.length} records for ${year}-${month+1}-${day}`);
+    }
+    
+    return filtered;
   };
 
   const renderMonthView = () => {
@@ -298,6 +319,8 @@ const ComplianceCalendar = () => {
     const monthName = currentDate.toLocaleString("default", { month: "long" });
     const year = currentDate.getFullYear();
     const month = currentDate.getMonth();
+
+    console.log(`📅 Rendering month view: ${monthName} ${year} with ${progressRecords.length} records`);
 
     // Empty cells for days before month starts
     for (let i = 0; i < firstDayOfMonth; i++) {
@@ -412,6 +435,9 @@ const ComplianceCalendar = () => {
           ))}
           {days}
         </div>
+        <div className="mt-2 text-xs text-gray-500 text-center">
+          Showing {progressRecords.length} obligations for {monthName} {year}
+        </div>
       </div>
     );
   };
@@ -430,6 +456,8 @@ const ComplianceCalendar = () => {
     const months = quarterMonths[quarter];
     const monthIndices = [quarter * 3, quarter * 3 + 1, quarter * 3 + 2];
 
+    console.log(`📅 Rendering quarter view: Q${quarter+1} ${year} with ${progressRecords.length} records`);
+
     // Group records by month using calculated_due_date
     const groupedByMonth = {};
     monthIndices.forEach((monthIdx, index) => {
@@ -441,6 +469,7 @@ const ComplianceCalendar = () => {
                dueDate.getMonth() === monthIdx;
       });
       groupedByMonth[monthName] = monthRecords;
+      console.log(`📊 ${monthName}: ${monthRecords.length} records`);
     });
 
     return (
@@ -585,6 +614,9 @@ const ComplianceCalendar = () => {
             );
           })}
         </div>
+        <div className="mt-2 text-xs text-gray-500 text-center">
+          Showing {progressRecords.length} obligations for {quarters[quarter]} {year}
+        </div>
       </div>
     );
   };
@@ -596,6 +628,8 @@ const ComplianceCalendar = () => {
       "July", "August", "September", "October", "November", "December"
     ];
 
+    console.log(`📅 Rendering year view: ${year} with ${progressRecords.length} records`);
+
     // Group records by month using calculated_due_date
     const groupedByMonth = {};
     months.forEach((month, index) => {
@@ -606,6 +640,7 @@ const ComplianceCalendar = () => {
                dueDate.getMonth() === index;
       });
       groupedByMonth[month] = monthRecords;
+      console.log(`📊 ${month}: ${monthRecords.length} records`);
     });
 
     // Get current month for highlighting
@@ -738,6 +773,9 @@ const ComplianceCalendar = () => {
               </div>
             );
           })}
+        </div>
+        <div className="mt-2 text-xs text-gray-500 text-center">
+          Showing {progressRecords.length} obligations for {year}
         </div>
       </div>
     );
@@ -995,19 +1033,25 @@ const ComplianceCalendar = () => {
         </div>
       </div>
 
-      {/* Stats Summary */}
+      {/* Stats Summary - Shows counts for the current period */}
       <div className="grid grid-cols-1 xs:grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-gray-400">
           <p className="text-[10px] sm:text-sm text-gray-500">Total</p>
           <p className="text-lg sm:text-2xl font-bold text-gray-900">{viewStats.total}</p>
+          <p className="text-[8px] sm:text-xs text-gray-400">
+            {view === "month" ? "This month" : view === "quarter" ? "This quarter" : "This year"}
+          </p>
         </div>
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-green-500">
           <p className="text-[10px] sm:text-sm text-gray-500">Closed</p>
           <p className="text-lg sm:text-2xl font-bold text-green-600">{viewStats.completed}</p>
+          <p className="text-[8px] sm:text-xs text-gray-400">
+            {viewStats.total > 0 ? Math.round((viewStats.completed / viewStats.total) * 100) : 0}% complete
+          </p>
         </div>
-        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-blue-500">
-          <p className="text-[10px] sm:text-sm text-gray-500">In Progress</p>
-          <p className="text-lg sm:text-2xl font-bold text-blue-600">{viewStats.inProgress}</p>
+        <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-yellow-500">
+          <p className="text-[10px] sm:text-sm text-gray-500">Open</p>
+          <p className="text-lg sm:text-2xl font-bold text-yellow-600">{viewStats.open || 0}</p>
         </div>
         <div className="bg-white rounded-lg shadow p-2 sm:p-4 border-l-4 border-red-500 bg-red-50">
           <p className="text-[10px] sm:text-sm text-red-600 font-medium">⚠ Overdue</p>
@@ -1044,10 +1088,12 @@ const ComplianceCalendar = () => {
           <span className="text-xs sm:text-sm font-medium text-gray-700">Status:</span>
           <div className="flex flex-wrap gap-1.5 sm:gap-3">
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-green-100 text-green-800 rounded">Closed</span>
-            <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-blue-100 text-blue-800 rounded">In Progress</span>
-            <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-red-100 text-red-800 rounded font-bold">⚠ Overdue</span>
             <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-yellow-100 text-yellow-800 rounded">Open</span>
+            <span className="px-1 sm:px-1.5 py-0.5 text-[9px] sm:text-xs bg-red-100 text-red-800 rounded font-bold">⚠ Overdue</span>
           </div>
+        </div>
+        <div className="mt-2 text-[10px] sm:text-xs text-gray-500 italic">
+          * Counts show all obligations for the selected {view === "month" ? "month" : view === "quarter" ? "quarter" : "year"}
         </div>
       </div>
 

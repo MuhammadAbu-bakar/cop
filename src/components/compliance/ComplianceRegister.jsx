@@ -38,6 +38,10 @@ const ComplianceRegister = () => {
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState("");
   const searchTimeoutRef = useRef(null);
   const [regions, setRegions] = useState([]);
+  
+  // Hover delay refs
+  const hoverTimeoutRef = useRef(null);
+  const [showTooltipId, setShowTooltipId] = useState(null);
 
   // Event tab filters
   const [eventSearchTerm, setEventSearchTerm] = useState("");
@@ -120,7 +124,6 @@ const ComplianceRegister = () => {
   const [policies, setPolicies] = useState([]);
   const [eventObligationsData, setEventObligationsData] = useState([]);
   const [allEventObligations, setAllEventObligations] = useState([]);
-  const [expandedObligationId, setExpandedObligationId] = useState(null);
 
   // Month options
   const months = [
@@ -220,6 +223,15 @@ const ComplianceRegister = () => {
     };
   }, []);
 
+  // Cleanup hover timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) {
+        clearTimeout(hoverTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const getRegionId = async (regionName) => {
     if (!regionName) return null;
     try {
@@ -309,7 +321,6 @@ const ComplianceRegister = () => {
         
         if (result.data && result.data.length > 0) {
           console.log('📅 Sample obligation calculated_due_date:', result.data[0].calculated_due_date);
-          console.log('📅 Sample obligation occurrence_date:', result.data[0].occurrence_date);
           console.log('📅 Sample obligation frequency:', result.data[0].frequency);
           console.log('📅 Sample obligation current_status:', result.data[0].current_status);
           console.log('📅 Sample obligation region:', result.data[0].region);
@@ -437,7 +448,7 @@ const ComplianceRegister = () => {
             region_id: regionId,
             occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
             status: 'Open',
-            approval_level: 'regional', // Set initial approval level
+            approval_level: 'regional',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });
@@ -752,7 +763,7 @@ const ComplianceRegister = () => {
             region_id: regionId,
             occurrence_date: new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).toISOString().split('T')[0],
             status: 'Open',
-            approval_level: 'regional', // Set initial approval level
+            approval_level: 'regional',
             created_at: new Date().toISOString(),
             updated_at: new Date().toISOString()
           });
@@ -993,10 +1004,6 @@ const ComplianceRegister = () => {
     );
   };
 
-  const toggleObligationName = (id) => {
-    setExpandedObligationId(expandedObligationId === id ? null : id);
-  };
-
   // Get filtered and sorted obligations
   const getFilteredAndSortedObligations = () => {
     console.log('📋 Filtering obligations with:', {
@@ -1020,7 +1027,6 @@ const ComplianceRegister = () => {
 
     if (filtered.length > 0) {
       console.log('📅 Sample filtered obligation calculated_due_date:', filtered[0]?.calculated_due_date);
-      console.log('📅 Sample filtered obligation occurrence_date:', filtered[0]?.occurrence_date);
       console.log('📅 Sample filtered obligation current_status:', filtered[0]?.current_status);
       console.log('📅 Sample filtered obligation approval_level:', filtered[0]?.approval_level);
       
@@ -1195,6 +1201,27 @@ const ComplianceRegister = () => {
       params.set('region', filterRegion);
     }
     navigate(`/compliance${params.toString() ? `?${params.toString()}` : ''}`, { replace: true });
+  };
+
+  // Hover handlers with 1.5 second delay
+  const handleMouseEnter = (id) => {
+    // Clear any existing timeout
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+    }
+    // Set a new timeout to show tooltip after 1.5 seconds
+    hoverTimeoutRef.current = setTimeout(() => {
+      setShowTooltipId(id);
+    }, 1500);
+  };
+
+  const handleMouseLeave = () => {
+    // Clear the timeout and hide tooltip immediately
+    if (hoverTimeoutRef.current) {
+      clearTimeout(hoverTimeoutRef.current);
+      hoverTimeoutRef.current = null;
+    }
+    setShowTooltipId(null);
   };
 
   // Render tooltip for obligation details - Updated with approval level
@@ -1769,13 +1796,17 @@ const ComplianceRegister = () => {
                   filteredEventObligations.map((event) => (
                     <tr
                       key={event.id}
-                      className="hover:bg-gray-50 transition-colors relative"
-                      onMouseEnter={() => setHoveredObligation(event.id)}
-                      onMouseLeave={() => setHoveredObligation(null)}
+                      className="hover:bg-gray-50 transition-colors relative cursor-pointer"
+                      onMouseEnter={() => handleMouseEnter(event.id)}
+                      onMouseLeave={handleMouseLeave}
+                      onClick={() => navigate(`/compliance/${event.obligation_id}`)}
                     >
-                      <td className="px-2 py-2 whitespace-nowrap">
+                      <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                         <button
-                          onClick={() => handleAddEventObligation(event)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleAddEventObligation(event);
+                          }}
                           disabled={addLoading}
                           className="inline-flex items-center justify-center px-3 py-1 bg-[#ff0099] text-white text-xs rounded hover:bg-[#e40076] transition-colors disabled:opacity-50"
                         >
@@ -1787,8 +1818,7 @@ const ComplianceRegister = () => {
                       </td>
                       <td className="px-2 py-2 relative max-w-[200px] sm:max-w-[250px] md:max-w-[300px]">
                         <div 
-                          className="text-xs sm:text-sm font-medium text-gray-900 truncate cursor-pointer hover:text-[#8cc63e] transition-colors"
-                          onClick={() => toggleObligationName(event.id)}
+                          className="text-xs sm:text-sm font-medium text-gray-900 truncate"
                           title={event.name}
                         >
                           {event.name}
@@ -1796,28 +1826,19 @@ const ComplianceRegister = () => {
                         <div className="text-[10px] text-gray-500 truncate">
                           ID: {event.obligation_id || 'N/A'}
                         </div>
-                        {expandedObligationId === event.id && (
-                          <div 
-                            className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
-                            onClick={() => toggleObligationName(event.id)}
-                          >
-                            <p className="text-sm font-medium text-gray-900 break-words">{event.name}</p>
-                            <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
-                          </div>
-                        )}
-                        {hoveredObligation === event.id && !expandedObligationId && renderEventTooltip(event)}
+                        {showTooltipId === event.id && renderEventTooltip(event)}
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                         <span className="text-xs text-gray-900">
                           {event.domain || 'N/A'}
                         </span>
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                         <span className="px-1.5 py-0.5 text-[10px] font-medium rounded-full bg-orange-100 text-orange-800">
                           {event.frequency || 'Event Based'}
                         </span>
                       </td>
-                      <td className="px-2 py-2">
+                      <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
                         <div className="text-xs text-gray-600 truncate max-w-[150px] sm:max-w-[200px]">
                           {event.description || 'No description'}
                         </div>
@@ -1894,16 +1915,18 @@ const ComplianceRegister = () => {
                     return (
                       <tr
                         key={uniqueKey}
-                        className="hover:bg-gray-50 transition-colors relative"
-                        onMouseEnter={() => setHoveredObligation(uniqueKey)}
-                        onMouseLeave={() => setHoveredObligation(null)}
+                        className="hover:bg-gray-50 transition-colors relative cursor-pointer"
+                        onMouseEnter={() => handleMouseEnter(uniqueKey)}
+                        onMouseLeave={handleMouseLeave}
+                        onClick={() => navigate(`/compliance/${obligation.obligation_id}`)}
                       >
-                        <td className="px-2 py-2 whitespace-nowrap">
+                        <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center space-x-1">
                             <Link
                               to={`/compliance/${obligation.obligation_id}`}
                               className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
                               title="View Details"
+                              onClick={(e) => e.stopPropagation()}
                             >
                               <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
@@ -1911,7 +1934,10 @@ const ComplianceRegister = () => {
                             </Link>
                             {canEdit && (
                               <button
-                                onClick={() => handleEditClick(obligation)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditClick(obligation);
+                                }}
                                 className="inline-flex items-center justify-center p-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
                                 title="Edit"
                               >
@@ -1922,7 +1948,10 @@ const ComplianceRegister = () => {
                             )}
                             {canDelete && (
                               <button
-                                onClick={() => handleDeleteClick(obligation)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDeleteClick(obligation);
+                                }}
                                 className="inline-flex items-center justify-center p-1 bg-red-600 text-white rounded hover:bg-red-700 transition-colors"
                                 title="Delete"
                               >
@@ -1935,8 +1964,7 @@ const ComplianceRegister = () => {
                         </td>
                         <td className="px-2 py-2 relative max-w-[200px] sm:max-w-[250px] md:max-w-[300px]">
                           <div 
-                            className="text-xs sm:text-sm font-medium text-gray-900 truncate cursor-pointer hover:text-[#8cc63e] transition-colors"
-                            onClick={() => toggleObligationName(uniqueKey)}
+                            className="text-xs sm:text-sm font-medium text-gray-900 truncate"
                             title={obligation.obligation_name}
                           >
                             {obligation.obligation_name}
@@ -1945,41 +1973,26 @@ const ComplianceRegister = () => {
                                 (Event)
                               </span>
                             )}
-                            {obligation.occurrence_date && (
-                              <span className="ml-1 text-[10px] text-gray-400 font-normal">
-                                (Occurrence: {formatDate(obligation.occurrence_date)})
-                              </span>
-                            )}
                           </div>
                           <div className="text-[10px] text-gray-500 truncate hidden sm:block">
                             {obligation.description?.substring(0, 40)}...
                           </div>
                           
-                          {expandedObligationId === uniqueKey && (
-                            <div 
-                              className="absolute left-0 top-full mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg z-20 p-3 cursor-pointer"
-                              onClick={() => toggleObligationName(uniqueKey)}
-                            >
-                              <p className="text-sm font-medium text-gray-900 break-words">{obligation.obligation_name}</p>
-                              <p className="text-xs text-gray-500 mt-1">Click to collapse</p>
-                            </div>
-                          )}
-                          
-                          {hoveredObligation === uniqueKey && !expandedObligationId && renderTooltip(obligation, dueDateColor, dueDate)}
+                          {showTooltipId === uniqueKey && renderTooltip(obligation, dueDateColor, dueDate)}
                         </td>
-                        <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap">
+                        <td className="hidden sm:table-cell px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <span className="text-xs text-gray-900">
                             {obligation.domain}
                           </span>
                         </td>
-                        <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap">
+                        <td className="hidden md:table-cell px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <span
                             className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getFrequencyBadge(obligation.frequency)}`}
                           >
                             {obligation.frequency}
                           </span>
                         </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
+                        <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center space-x-1">
                             <span className={`text-xs ${dueDateColor}`}>
                               {formatDate(dueDate)}
@@ -1991,14 +2004,14 @@ const ComplianceRegister = () => {
                             )}
                           </div>
                         </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
+                        <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <span
                             className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getStatusBadge(status)}`}
                           >
                             {status}
                           </span>
                         </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
+                        <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <span
                             className={`px-1.5 py-0.5 text-[10px] font-medium rounded-full ${getApprovalLevelBadge(approvalLevel)}`}
                           >
