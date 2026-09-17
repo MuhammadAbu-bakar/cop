@@ -32,6 +32,7 @@ const Reports = () => {
   const [selectedRegion, setSelectedRegion] = useState("");
   const [selectedMonth, setSelectedMonth] = useState("");
   const [selectedYear, setSelectedYear] = useState("");
+  const [selectedObligationId, setSelectedObligationId] = useState("");
   
   // Available options for filters
   const [domains, setDomains] = useState([]);
@@ -41,6 +42,8 @@ const Reports = () => {
   const [allClauses, setAllClauses] = useState([]);
   const [regionOptions, setRegionOptions] = useState([]);
   const [allRegionOptions, setAllRegionOptions] = useState([]);
+  const [obligationIdOptions, setObligationIdOptions] = useState([]);
+  const [allObligationIdOptions, setAllObligationIdOptions] = useState([]);
   const [months] = useState([
     { value: "01", label: "January" },
     { value: "02", label: "February" },
@@ -99,10 +102,10 @@ const Reports = () => {
   }, []);
 
   useEffect(() => {
-    if (selectedDomain || selectedPolicy || selectedClause || selectedRegion || selectedMonth || selectedYear) {
+    if (selectedDomain || selectedPolicy || selectedClause || selectedRegion || selectedMonth || selectedYear || selectedObligationId) {
       fetchReportData();
     }
-  }, [selectedDomain, selectedPolicy, selectedClause, selectedRegion, selectedMonth, selectedYear]);
+  }, [selectedDomain, selectedPolicy, selectedClause, selectedRegion, selectedMonth, selectedYear, selectedObligationId]);
 
   // Cascading filter effect - Update policies, clauses based on selectedDomain
   useEffect(() => {
@@ -111,6 +114,7 @@ const Reports = () => {
     } else {
       setPolicies(allPolicies);
       setClauses(allClauses);
+      setObligationIdOptions(allObligationIdOptions);
     }
   }, [selectedDomain]);
 
@@ -119,7 +123,7 @@ const Reports = () => {
       // Fetch all obligations to get unique values from compliance_obligations
       const { data: obligationsData, error: obligationsError } = await supabase
         .from('compliance_obligations')
-        .select('domain, clause, policy, obligation_type')
+        .select('domain, clause, policy, obligation_type, obligation_id')
         .order('domain');
 
       if (obligationsError) {
@@ -135,6 +139,10 @@ const Reports = () => {
         const uniqueClauses = [...new Set(obligationsData.map(o => o.clause).filter(Boolean))];
         setAllClauses(uniqueClauses);
         setClauses(uniqueClauses);
+
+        const uniqueObligationIds = [...new Set(obligationsData.map(o => o.obligation_id).filter(Boolean))];
+        setAllObligationIdOptions(uniqueObligationIds);
+        setObligationIdOptions(uniqueObligationIds);
       }
 
       // Fetch policies
@@ -184,7 +192,7 @@ const Reports = () => {
     try {
       const { data: domainObligations, error } = await supabase
         .from('compliance_obligations')
-        .select('clause, policy')
+        .select('clause, policy, obligation_id')
         .eq('domain', domain);
 
       if (error) throw error;
@@ -198,12 +206,18 @@ const Reports = () => {
         const uniqueClauses = [...new Set(domainObligations.map(o => o.clause).filter(Boolean))];
         setClauses(uniqueClauses);
 
+        const uniqueObligationIds = [...new Set(domainObligations.map(o => o.obligation_id).filter(Boolean))];
+        setObligationIdOptions(uniqueObligationIds);
+
         // Clear selections that are no longer valid
         if (selectedPolicy && !filteredPolicies.some(p => p.id === selectedPolicy)) {
           setSelectedPolicy("");
         }
         if (selectedClause && !uniqueClauses.includes(selectedClause)) {
           setSelectedClause("");
+        }
+        if (selectedObligationId && !uniqueObligationIds.includes(selectedObligationId)) {
+          setSelectedObligationId("");
         }
       }
     } catch (error) {
@@ -221,6 +235,7 @@ const Reports = () => {
       if (selectedClause) filters.clause = selectedClause;
       if (selectedMonth) filters.month = selectedMonth;
       if (selectedYear) filters.year = selectedYear;
+      if (selectedObligationId) filters.obligation_id = selectedObligationId;
 
       console.log('📊 Fetching report data with filters:', filters);
 
@@ -325,6 +340,11 @@ const Reports = () => {
                 .lte("uploaded_at", endDate.toISOString());
             }
 
+            // Apply obligation_id filter on evidence
+            if (selectedObligationId) {
+              evidenceQuery = evidenceQuery.eq('obligation_id', selectedObligationId);
+            }
+
             const { data: evidenceResult, error: evidenceError } = await evidenceQuery;
 
             if (evidenceError) {
@@ -397,6 +417,7 @@ const Reports = () => {
         region: selectedRegion || (!isAdmin ? userRegion : "All Regions"),
         month: selectedMonth,
         year: selectedYear,
+        obligationId: selectedObligationId,
         userRegion: !isAdmin ? userRegion : "All Regions",
       },
     };
@@ -438,8 +459,15 @@ const Reports = () => {
         }
       }
 
+      // Filter by obligation ID if selected
+      if (selectedObligationId) {
+        evidenceToDownload = evidenceToDownload.filter(
+          item => item.obligation_id === selectedObligationId
+        );
+      }
+
       if (evidenceToDownload.length === 0) {
-        toast.warning(`No documents found for ${selectedRegion || (!isAdmin ? userRegion : 'the selected filters')}.`);
+        toast.warning(`No documents found for ${selectedObligationId ? `obligation ${selectedObligationId}` : (selectedRegion || (!isAdmin ? userRegion : 'the selected filters'))}.`);
         setDownloading(false);
         return;
       }
@@ -539,6 +567,9 @@ const Reports = () => {
       const zipBlob = await zip.generateAsync({ type: "blob" });
 
       let zipFileName = `compliance_documents`;
+      if (selectedObligationId) {
+        zipFileName += `_${selectedObligationId}`;
+      }
       if (selectedRegion) {
         zipFileName += `_${selectedRegion.replace(/\s/g, '')}`;
       } else if (!isAdmin && userRegion) {
@@ -596,9 +627,11 @@ const Reports = () => {
     setSelectedRegion("");
     setSelectedMonth("");
     setSelectedYear("");
+    setSelectedObligationId("");
     setPolicies(allPolicies);
     setClauses(allClauses);
     setRegionOptions(allRegionOptions);
+    setObligationIdOptions(allObligationIdOptions);
     toast.info("Filters cleared");
   };
 
@@ -669,6 +702,24 @@ const Reports = () => {
             <div className="space-y-3 sm:space-y-4">
               <div className="border-t border-gray-200 pt-3 sm:pt-4">
                 <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1">
+                      Obligation ID
+                    </label>
+                    <select
+                      value={selectedObligationId}
+                      onChange={(e) => setSelectedObligationId(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-[#8cc63e] focus:border-transparent"
+                    >
+                      <option value="">All Obligation IDs</option>
+                      {obligationIdOptions.map((id) => (
+                        <option key={id} value={id}>
+                          {id}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
                   <div>
                     <label className="block text-xs font-medium text-gray-600 mb-1">
                       Domain
@@ -836,6 +887,11 @@ const Reports = () => {
                     ✓ Only documents from {selectedRegion || userRegion} will be downloaded
                   </p>
                 )}
+                {selectedObligationId && (
+                  <p className="text-[9px] sm:text-[10px] text-blue-600 text-center mt-1.5">
+                    ✓ Only documents for {selectedObligationId} will be downloaded
+                  </p>
+                )}
                 {allEvidence.length === 0 && !downloading && (
                   <p className="text-[10px] sm:text-xs text-gray-500 text-center mt-2">
                     No documents available to download
@@ -861,6 +917,7 @@ const Reports = () => {
               {reportData?.filters && (
                 <span className="text-[10px] sm:text-xs text-gray-500">
                   {reportData.filters.userRegion && `Region: ${reportData.filters.userRegion} `}
+                  {reportData.filters.obligationId && `• Obligation: ${reportData.filters.obligationId} `}
                   {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                   {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                   {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}
@@ -949,6 +1006,7 @@ const Reports = () => {
                 {reportData?.filters && (
                   <p className="text-[8px] sm:text-xs mt-0.5 sm:mt-1">
                     {reportData.filters.userRegion && `Region: ${reportData.filters.userRegion} `}
+                    {reportData.filters.obligationId && `• Obligation: ${reportData.filters.obligationId} `}
                     {reportData.filters.domain && `• Domain: ${reportData.filters.domain} `}
                     {reportData.filters.policy && `• Policy: ${reportData.filters.policy} `}
                     {reportData.filters.clause && `• Clause: ${reportData.filters.clause} `}

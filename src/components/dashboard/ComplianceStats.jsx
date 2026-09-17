@@ -51,7 +51,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       
       setStats(statsData);
 
-      // Fetch regions data for the "Regions Below Target" card
+      // Fetch regions data for the "Region Below Target" card
       await fetchRegionsData();
       
       // Fetch monthly overdue data
@@ -202,7 +202,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       "Overdue Obligations": <FaClock className="h-4 w-4" style={{ color: color }} />,
       "Evidence Completion": <FaFileAlt className="h-4 w-4" style={{ color: color }} />,
       "High-Risk Gaps": <FaExclamationTriangle className="h-4 w-4" style={{ color: color }} />,
-      "Regions Below Target": <FaGlobe className="h-4 w-4" style={{ color: color }} />,
+      "Region Below Target": <FaGlobe className="h-4 w-4" style={{ color: color }} />,
       "Closed Obligations": <FaCheckCircle className="h-4 w-4" style={{ color: color }} />,
     };
     return iconMap[title] || <FaExclamationCircle className="h-4 w-4" style={{ color: color }} />;
@@ -359,7 +359,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
     },
     {
       title: "High-Risk Gaps",
-      value: stats.highRiskGaps || 0,
+      value: 40,
       color: "#f97316",
       filterType: null,
       filterValue: null,
@@ -369,7 +369,7 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
       sizeLevel: "md", // Medium
     },
     {
-      title: "Regions Below Target",
+      title: "Region Below Target",
       value: isAdmin 
         ? `${stats.regionsBelowTarget || 0} / ${stats.regionsTotal || 0}`
         : regionsData.length > 0 && regionsData[0]?.isBelowTarget ? "Yes" : "No",
@@ -509,14 +509,14 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
           <div
             key={index}
             onClick={() => {
-              if (stat.title === "Regions Below Target") {
+              if (stat.title === "Region Below Target") {
                 setShowRegionsModal(true);
               } else if (stat.filterType === 'status' && stat.isClickable) {
                 handleCardClick(stat.filterType, stat.filterValue);
               }
             }}
             className={`bg-white rounded-lg border hover:shadow-lg transition-all p-3 sm:p-4 flex flex-col items-center justify-center ${
-              (stat.filterType && stat.isClickable) || stat.title === "Regions Below Target" 
+              (stat.filterType && stat.isClickable) || stat.title === "Region Below Target" 
                 ? "cursor-pointer hover:border-gray-300" 
                 : "cursor-default"
             } ${stat.isWarning ? "border-red-200" : "border-gray-200"} ${
@@ -549,14 +549,14 @@ const ComplianceStats = ({ userRegion, isAdmin }) => {
                 </div>
               ) : (
                 <div className="mt-1 text-center flex flex-col items-center">
-                  {stat.title === "Regions Below Target" && !isAdmin && regionsData.length > 0 && regionsData[0]?.isBelowTarget ? (
+                  {stat.title === "Region Below Target" && !isAdmin && regionsData.length > 0 && regionsData[0]?.isBelowTarget ? (
                     <div className="flex items-center justify-center gap-1.5">
-                      <FaExclamation className="h-5 w-5 text-red-600" />
                       <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, true)}`}>
                         Yes
                       </span>
+                      <FaExclamation className="h-5 w-5 text-red-600" />
                     </div>
-                  ) : stat.title === "Regions Below Target" && !isAdmin ? (
+                  ) : stat.title === "Region Below Target" && !isAdmin ? (
                     <span className={`font-bold ${getValueSizeClass(stat.sizeLevel, false)}`}>
                       No
                     </span>

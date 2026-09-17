@@ -1447,10 +1447,7 @@ const ComplianceRegister = () => {
             Compliance Register
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            {activeTab === "todo" 
-              ? `${filteredObligations.length} obligations found`
-              : `${filteredEventObligations.length} event obligations available`
-            }
+            
             {!isAdminUser && userRegion && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
