@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../api/supabase";
 import { 
@@ -15,11 +15,15 @@ import {
   adminFinalApprove,
   adminReject,
   getApprovalHistory,
-  submitForRegionalApproval
+  submitForRegionalApproval,
+  calculateDueDateForPeriod,
+  findOrCreateProgressForPeriod,
 } from "../../api/compliance";
 
 const ObligationDetails = () => {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  const progressIdFromUrl = searchParams.get('progress'); // <-- KEY: specific occurrence
   const obligationId = id;
   const navigate = useNavigate();
   const { profile } = useAuth();
@@ -40,6 +44,7 @@ const ObligationDetails = () => {
   const templateFileInputRef = useRef(null);
 
   const [obligation, setObligation] = useState(null);
+  const [currentProgress, setCurrentProgress] = useState(null); // <-- the specific occurrence
   const [evidence, setEvidence] = useState([]);
   const [activities, setActivities] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -82,7 +87,7 @@ const ObligationDetails = () => {
       setError("No obligation ID provided. Please check the URL.");
       setLoading(false);
     }
-  }, [obligationId]);
+  }, [obligationId, progressIdFromUrl]);
 
   useEffect(() => {
     if (obligation) {
@@ -92,7 +97,7 @@ const ObligationDetails = () => {
       checkPendingApprovals();
       fetchProgressRecords();
     }
-  }, [obligation]);
+  }, [obligation, progressIdFromUrl]);
 
   const getRegionId = async (regionName) => {
     if (!regionName) return null;
@@ -197,7 +202,8 @@ const ObligationDetails = () => {
     if (!obligation) return;
 
     try {
-      // Check for manager pending approvals (regional level)
+      // KEY: If we have a specific progressIdFromUrl, scope the pending checks
+      // to THAT occurrence. Otherwise fall back to the existing behavior.
       let managerQuery = supabase
         .from('compliance_progress')
         .select(`
@@ -219,7 +225,6 @@ const ObligationDetails = () => {
         .order('updated_at', { ascending: false })
         .limit(1);
 
-      // Check for admin pending approvals (manager level)
       let adminQuery = supabase
         .from('compliance_progress')
         .select(`
@@ -246,6 +251,12 @@ const ObligationDetails = () => {
         .order('updated_at', { ascending: false })
         .limit(1);
 
+      // If URL has a specific occurrence, filter pending queries to that occurrence
+      if (progressIdFromUrl) {
+        managerQuery = managerQuery.eq('id', progressIdFromUrl);
+        adminQuery = adminQuery.eq('id', progressIdFromUrl);
+      }
+
       // Apply region filters based on role
       if (!isAdminUser && userRegion) {
         const regionId = await getRegionId(userRegion);
@@ -266,7 +277,6 @@ const ObligationDetails = () => {
       setPendingManagerApproval(managerResult.data?.[0] || null);
       setPendingAdminApproval(adminResult.data?.[0] || null);
       
-      // Set pendingApproval for backward compatibility
       if (isAdminUser && adminResult.data?.[0]) {
         setPendingApproval(adminResult.data[0]);
       } else if (isManager && managerResult.data?.[0]) {
@@ -278,6 +288,7 @@ const ObligationDetails = () => {
       console.log('📊 Pending approvals:', {
         manager: managerResult.data?.[0]?.id || null,
         admin: adminResult.data?.[0]?.id || null,
+        scopedToOccurrence: progressIdFromUrl,
         role: userRole
       });
 
@@ -286,6 +297,12 @@ const ObligationDetails = () => {
     }
   };
 
+  // ============================================================
+  // FETCH OBLIGATION DETAILS
+  // - Loads obligation record
+  // - Loads the SPECIFIC occurrence (progressIdFromUrl) if present
+  // - Filters evidence by that occurrence_id (or region if no occurrence)
+  // ============================================================
   const fetchObligationDetails = async () => {
     setLoading(true);
     setError(null);
@@ -311,7 +328,34 @@ const ObligationDetails = () => {
 
       setObligation(obligationData);
 
-      // Fetch evidence using the text obligation_id (not UUID)
+      // ---------------------------------------------------------
+      // Fetch the specific occurrence (progress record) if URL has one
+      // ---------------------------------------------------------
+      let specificProgress = null;
+      if (progressIdFromUrl) {
+        const { data: prog, error: progErr } = await supabase
+          .from('compliance_progress')
+          .select(`
+            *,
+            region:regions(id, name, code)
+          `)
+          .eq('id', progressIdFromUrl)
+          .maybeSingle();
+
+        if (progErr) {
+          console.error('Error fetching specific occurrence:', progErr);
+        } else if (prog) {
+          specificProgress = prog;
+          setCurrentProgress(prog);
+          console.log(`🎯 Loaded occurrence: ${prog.id} (${prog.occurrence_date})`);
+        }
+      } else {
+        setCurrentProgress(null);
+      }
+
+      // ---------------------------------------------------------
+      // Fetch evidence — SCOPED to the specific occurrence if URL has one
+      // ---------------------------------------------------------
       let evidenceQuery = supabase
         .from('evidence')
         .select(`
@@ -319,6 +363,7 @@ const ObligationDetails = () => {
           progress:compliance_progress!evidence_occurrence_id_fkey(
             id,
             occurrence_date,
+            calculated_due_date,
             status,
             approval_level,
             region:regions(id, name, code)
@@ -326,6 +371,12 @@ const ObligationDetails = () => {
         `)
         .eq('obligation_id', obligationData.obligation_id)
         .order('uploaded_at', { ascending: false });
+
+      // KEY FIX: filter evidence by the specific occurrence_id when available
+      if (progressIdFromUrl) {
+        console.log(`🎯 Filtering evidence by occurrence_id = ${progressIdFromUrl}`);
+        evidenceQuery = evidenceQuery.eq('occurrence_id', progressIdFromUrl);
+      }
 
       // Filter by region for non-admin users
       if (!isAdminUser && userRegion) {
@@ -338,17 +389,25 @@ const ObligationDetails = () => {
       const { data: evidenceData, error: evidenceError } = await evidenceQuery;
       if (!evidenceError) {
         setEvidence(evidenceData || []);
-        console.log(`✅ Evidence loaded: ${evidenceData?.length || 0} records`);
+        console.log(`✅ Evidence loaded: ${evidenceData?.length || 0} records for occurrence ${progressIdFromUrl || 'ALL'}`);
       } else {
         console.error('Error fetching evidence:', evidenceError);
       }
 
-      // Fetch activity history
-      const { data: activityData, error: activityError } = await supabase
+      // ---------------------------------------------------------
+      // Fetch activity history — scoped to occurrence if available
+      // ---------------------------------------------------------
+      let activityQuery = supabase
         .from('activity_history')
         .select('*')
         .eq('obligation_id', obligationData.obligation_id)
         .order('created_at', { ascending: false });
+
+      if (progressIdFromUrl) {
+        activityQuery = activityQuery.eq('progress_id', progressIdFromUrl);
+      }
+
+      const { data: activityData, error: activityError } = await activityQuery;
 
       if (!activityError) {
         setActivities(activityData || []);
@@ -480,7 +539,6 @@ const ObligationDetails = () => {
   const handleEvidenceDelete = async (evidenceItem) => {
     if (!evidenceItem) return;
     
-    // Check if user has permission to delete
     const canDelete = isAdminUser || (canDeleteEvidence && evidenceItem.region_id);
     
     if (!canDelete) {
@@ -494,21 +552,17 @@ const ObligationDetails = () => {
     setDeletingEvidence(evidenceItem.id);
 
     try {
-      // Extract file path from URL
       const filePath = evidenceItem.file_url.split('/').pop();
       const storagePath = `evidence/${obligation.obligation_id}/${evidenceItem.occurrence_id}/${filePath}`;
 
-      // Delete from storage
       const { error: storageError } = await supabase.storage
         .from('obligation_evidence')
         .remove([storagePath]);
 
       if (storageError) {
         console.error('Error deleting file from storage:', storageError);
-        // Continue with database deletion even if storage fails
       }
 
-      // Delete from evidence table
       const { error: dbError } = await supabase
         .from('evidence')
         .delete()
@@ -516,7 +570,6 @@ const ObligationDetails = () => {
 
       if (dbError) throw dbError;
 
-      // Update progress record to remove evidence reference and reset status
       if (evidenceItem.occurrence_id) {
         const { error: progressError } = await supabase
           .from('compliance_progress')
@@ -533,7 +586,6 @@ const ObligationDetails = () => {
         }
       }
 
-      // Add activity
       await supabase.from("activity_history").insert({
         obligation_id: obligation.id,
         action: `Evidence "${evidenceItem.file_name}" deleted`,
@@ -545,7 +597,6 @@ const ObligationDetails = () => {
 
       showMessage(`Evidence "${evidenceItem.file_name}" deleted successfully!`, "success");
       
-      // Refresh data
       await Promise.all([
         fetchObligationDetails(),
         fetchRegionProgress(),
@@ -627,20 +678,25 @@ const ObligationDetails = () => {
       }
 
       try {
-        let progressId = null;
-        const { data: existingProgress, error: findError } = await supabase
-          .from('compliance_progress')
-          .select('id, status, occurrence_date, approval_level')
-          .eq('obligation_id', obligation.obligation_id)
-          .eq('region_id', regionId)
-          .order('occurrence_date', { ascending: false })
-          .limit(1);
+        let progressId = progressIdFromUrl || null;
+        
+        if (!progressId) {
+          const { data: existingProgress, error: findError } = await supabase
+            .from('compliance_progress')
+            .select('id, status, occurrence_date, approval_level')
+            .eq('obligation_id', obligation.obligation_id)
+            .eq('region_id', regionId)
+            .order('occurrence_date', { ascending: false })
+            .limit(1);
 
-        if (findError) throw findError;
+          if (findError) throw findError;
 
-        if (existingProgress && existingProgress.length > 0) {
-          progressId = existingProgress[0].id;
-          
+          if (existingProgress && existingProgress.length > 0) {
+            progressId = existingProgress[0].id;
+          }
+        }
+
+        if (progressId) {
           const updateData = {
             status: newStatus,
             updated_at: new Date().toISOString()
@@ -715,7 +771,6 @@ const ObligationDetails = () => {
 
       if (error) throw error;
 
-      // Update all open progress records
       if (newStatus === "Closed") {
         await supabase
           .from("compliance_progress")
@@ -728,7 +783,6 @@ const ObligationDetails = () => {
           .in("status", ["Open", "Submitted/Under Review"]);
       }
 
-      // Add activity
       await supabase.from("activity_history").insert({
         obligation_id: obligation.id,
         action: `Status updated to ${newStatus}`,
@@ -878,6 +932,11 @@ const ObligationDetails = () => {
     setSelectedFile(file);
   };
 
+  // ============================================================
+  // UPLOAD EVIDENCE
+  // If URL has ?progress=<id>, upload to THAT specific occurrence.
+  // Otherwise, calculate the current period and use it.
+  // ============================================================
   const handleFileUpload = async () => {
     if (!selectedFile || !obligation) return;
 
@@ -886,7 +945,7 @@ const ObligationDetails = () => {
 
     try {
       if (!isAdminUser && !userRegion) {
-        throw new Error('Your profile does not have a region assigned. Please contact your administrator.');
+        throw new Error('Your profile does not have a region assigned.');
       }
 
       const regionId = await getRegionId(userRegion);
@@ -894,140 +953,127 @@ const ObligationDetails = () => {
         throw new Error('Region not found for user.');
       }
 
-      const currentDate = new Date();
-      const year = currentDate.getFullYear();
-      const month = currentDate.getMonth();
-      
-      let progressId = null;
-      
-      // Find or create progress record for this obligation in the current month
-      if (!isAdminUser && regionId) {
-        const startDate = new Date(year, month, 1).toISOString().split('T')[0];
-        const endDate = new Date(year, month + 1, 0).toISOString().split('T')[0];
+      // ----- Determine which progress record to attach to -----
+      let progressId = progressIdFromUrl;
+      let occurrenceDate = currentProgress?.occurrence_date || null;
+      let calculatedDueDate = currentProgress?.calculated_due_date || null;
 
-        const { data: existingProgress, error: findError } = await supabase
+      if (progressId) {
+        // Verify it exists & belongs to this obligation
+        const { data: progCheck, error: checkErr } = await supabase
           .from('compliance_progress')
-          .select('id')
-          .eq('obligation_id', obligation.obligation_id)
-          .eq('region_id', regionId)
-          .gte('occurrence_date', startDate)
-          .lte('occurrence_date', endDate)
-          .limit(1);
+          .select('id, obligation_id, region_id, occurrence_date, calculated_due_date')
+          .eq('id', progressId)
+          .maybeSingle();
 
-        if (findError) throw findError;
-
-        if (existingProgress && existingProgress.length > 0) {
-          progressId = existingProgress[0].id;
-        } else {
-          const dueDate = obligation.calculated_due_date || 
-            new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).toISOString().split('T')[0];
-
-          const { data: newProgress, error: insertError } = await supabase
-            .from('compliance_progress')
-            .insert({
-              obligation_id: obligation.obligation_id,
-              region_id: regionId,
-              occurrence_date: new Date(year, month, 1).toISOString().split('T')[0],
-              status: 'Open',
-              approval_level: 'regional',
-              created_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
-            })
-            .select();
-
-          if (insertError) throw insertError;
-          if (newProgress && newProgress[0]) {
-            progressId = newProgress[0].id;
-          }
+        if (checkErr || !progCheck) {
+          throw new Error('Invalid occurrence specified in URL.');
         }
+        if (progCheck.obligation_id !== obligation.obligation_id) {
+          throw new Error('Occurrence does not belong to this obligation.');
+        }
+        if (!isAdminUser && progCheck.region_id !== regionId) {
+          throw new Error('Occurrence does not belong to your region.');
+        }
+
+        occurrenceDate = progCheck.occurrence_date;
+        calculatedDueDate = progCheck.calculated_due_date;
+        console.log(`✅ Using occurrence from URL: ${progressId} (${occurrenceDate})`);
+      } else {
+        // Fallback: compute current period and find/create
+        const frequency = obligation.frequency || 'Monthly';
+        const dueDateRule = obligation.due_date_rule || null;
+
+        const calc = calculateDueDateForPeriod(
+          frequency,
+          new Date(),
+          dueDateRule
+        );
+        occurrenceDate = calc.occurrence_date;
+        calculatedDueDate = calc.calculated_due_date;
+
+        const { data: progressRecord, error: progressError } = 
+          await findOrCreateProgressForPeriod(
+            obligation.obligation_id,
+            regionId,
+            frequency,
+            dueDateRule
+          );
+
+        if (progressError || !progressRecord) {
+          throw new Error('Could not resolve progress record for this period.');
+        }
+        progressId = progressRecord.id;
+        console.log(`📅 Using computed period progress record: ${progressId} (${occurrenceDate})`);
       }
 
-      if (!progressId) {
-        throw new Error('Could not find or create a progress record for this month.');
-      }
-
-      // Upload the file
+      // ----- Upload file -----
       const fileName = `${Date.now()}_${selectedFile.name}`;
       const filePath = `evidence/${obligation.obligation_id}/${progressId}/${fileName}`;
 
-      const { error: uploadError } = await supabase.storage
+      const { error: upErr } = await supabase.storage
         .from('obligation_evidence')
         .upload(filePath, selectedFile);
-
-      if (uploadError) throw uploadError;
+      if (upErr) throw upErr;
 
       const { data: urlData } = supabase.storage
         .from('obligation_evidence')
         .getPublicUrl(filePath);
 
-      // Save evidence record with text obligation_id
-      const { data: evidenceData, error: evidenceError } = await supabase
+      // ----- Insert evidence tied to THIS occurrence -----
+      const { data: evidenceData, error: evErr } = await supabase
         .from('evidence')
         .insert({
           obligation_id: obligation.obligation_id,
-          occurrence_id: progressId,
+          occurrence_id: progressId,                 // KEY: exact occurrence
           region_id: regionId,
           file_name: selectedFile.name,
           file_url: urlData.publicUrl,
           file_type: selectedFile.type,
           file_size: selectedFile.size,
           uploaded_by: profile?.id || null,
-          status: 'Pending'
+          status: 'Pending',
         })
-        .select();
+        .select()
+        .single();
+      if (evErr) throw evErr;
 
-      if (evidenceError) throw evidenceError;
+      // ----- Update THIS occurrence's progress -----
+      await supabase
+        .from('compliance_progress')
+        .update({
+          status: 'Submitted/Under Review',
+          approval_level: 'regional',
+          evidence_id: evidenceData.id,
+          uploaded_by: profile?.id || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', progressId);
 
-      // Update progress status to "Submitted/Under Review" with approval_level 'regional'
-      if (evidenceData && evidenceData[0]) {
-        const updateResult = await supabase
-          .from('compliance_progress')
-          .update({
-            status: 'Submitted/Under Review',
-            approval_level: 'regional', // Waiting for Regional Manager
-            evidence_id: evidenceData[0].id,
-            uploaded_by: profile?.id || null,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', progressId)
-          .select();
+      // Format period label for user message
+      const periodLabel = occurrenceDate
+        ? new Date(occurrenceDate).toLocaleString('en-US', { month: 'long', year: 'numeric' })
+        : 'current period';
 
-        if (updateResult.error) {
-          console.error('Error updating progress status:', updateResult.error);
-          throw updateResult.error;
-        }
+      showMessage(
+        `Evidence submitted for ${periodLabel}${calculatedDueDate ? ` (due ${calculatedDueDate})` : ''}.`,
+        'success'
+      );
 
-        await addActivityHistory(
-          obligation.obligation_id,
-          progressId,
-          `Evidence uploaded - Waiting for Regional Manager approval`,
-          `Submitted by ${profile?.full_name || 'User'}`
-        );
-
-        showMessage('Evidence submitted for Regional Manager approval.', "success");
-      }
-
-      // Refresh data
       await Promise.all([
         fetchObligationDetails(),
         fetchRegionProgress(),
         fetchOccurrences(),
         checkPendingApprovals(),
-        fetchProgressRecords()
+        fetchProgressRecords(),
       ]);
-      
-      showMessage(`Evidence uploaded successfully${!isAdminUser && userRegion ? ` for region ${userRegion}` : ''}!`, "success");
+
       setSelectedFile(null);
-      
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
-      console.error("Error uploading evidence:", error);
-      setUploadError(
-        error.message || "Failed to upload evidence. Please try again.",
-      );
-      showMessage("Failed to upload evidence: " + error.message, "error");
+      console.error('Upload error:', error);
+      setUploadError(error.message || 'Upload failed.');
+      showMessage('Upload failed: ' + error.message, 'error');
     } finally {
       setUploading(false);
     }
@@ -1037,7 +1083,6 @@ const ObligationDetails = () => {
   // TWO-LEVEL APPROVAL FUNCTIONS
   // ============================================================
 
-  // Regional Manager Approve
   const handleManagerApprove = async () => {
     if (!pendingManagerApproval) return;
 
@@ -1061,7 +1106,6 @@ const ObligationDetails = () => {
     }
   };
 
-  // Regional Manager Reject
   const handleManagerReject = async () => {
     if (!pendingManagerApproval) return;
 
@@ -1085,7 +1129,6 @@ const ObligationDetails = () => {
     }
   };
 
-  // Admin Final Approve
   const handleAdminFinalApprove = async () => {
     if (!pendingAdminApproval) return;
 
@@ -1109,7 +1152,6 @@ const ObligationDetails = () => {
     }
   };
 
-  // Admin Reject
   const handleAdminReject = async () => {
     if (!pendingAdminApproval) return;
 
@@ -1133,19 +1175,16 @@ const ObligationDetails = () => {
     }
   };
 
-  // Legacy Approve (for backward compatibility)
   const handleApprove = async () => {
     if (!pendingApproval) return;
 
     setProcessingId(pendingApproval.id);
     try {
-      // Determine which approval function to use based on role and approval level
       if (isManager && pendingApproval.approval_level === 'regional') {
         await handleManagerApprove();
       } else if (isAdminUser && pendingApproval.approval_level === 'manager') {
         await handleAdminFinalApprove();
       } else if (isAdminUser) {
-        // Fallback for admin - final approve
         const result = await adminFinalApprove(pendingApproval.id, comment);
         if (result.error) throw result.error;
         showMessage('✅ Approved successfully!', "success");
@@ -1166,13 +1205,11 @@ const ObligationDetails = () => {
     }
   };
 
-  // Legacy Reject (for backward compatibility)
   const handleReject = async () => {
     if (!pendingApproval) return;
 
     setProcessingId(pendingApproval.id);
     try {
-      // Determine which reject function to use based on role and approval level
       if (isManager && pendingApproval.approval_level === 'regional') {
         await handleManagerReject();
       } else if (isAdminUser && pendingApproval.approval_level === 'manager') {
@@ -1198,7 +1235,6 @@ const ObligationDetails = () => {
     }
   };
 
-  // View Approval History
   const handleViewApprovalHistory = async () => {
     if (!pendingApproval) return;
 
@@ -1222,6 +1258,7 @@ const ObligationDetails = () => {
     try {
       await supabase.from("activity_history").insert({
         obligation_id: obligation.id,
+        progress_id: progressIdFromUrl || null,
         action: 'Comment added',
         user_id: profile?.id || null,
         user_name: profile?.full_name || "System",
@@ -1284,7 +1321,6 @@ const ObligationDetails = () => {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
   };
 
-  // Get the appropriate approval action for the current user
   const getApprovalActions = () => {
     if (isManager && pendingManagerApproval) {
       return {
@@ -1307,7 +1343,6 @@ const ObligationDetails = () => {
         pendingItem: pendingAdminApproval
       };
     } else if (isAdminUser && pendingManagerApproval) {
-      // Admin can also see manager pending items
       return {
         canApprove: false,
         canReject: false,
@@ -1376,6 +1411,10 @@ const ObligationDetails = () => {
 
   const pendingItem = approvalActions.pendingItem;
 
+  // Determine the status badge to show in header based on current occurrence
+  const headerStatus = currentProgress?.status || regionProgress?.status || obligation.current_status || 'Open';
+  const headerApprovalLevel = currentProgress?.approval_level || regionProgress?.approval_level || obligation.approval_level || 'regional';
+
   return (
     <div className="space-y-4 sm:space-y-6 px-3 sm:px-4 md:px-0 relative">
       {/* Center Message */}
@@ -1420,22 +1459,27 @@ const ObligationDetails = () => {
             {obligation.obligation_id}
           </h1>
           <p className="text-sm text-gray-600 break-words">{obligation.obligation_name}</p>
+          {/* NEW: Show the specific occurrence being viewed */}
+          {currentProgress && (
+            <p className="text-xs text-gray-500 mt-0.5">
+              Occurrence: <span className="font-medium">{formatDate(currentProgress.occurrence_date)}</span>
+              {currentProgress.calculated_due_date && (
+                <> • Due: <span className="font-medium">{formatDate(currentProgress.calculated_due_date)}</span></>
+              )}
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-2 mt-1">
             {!isAdminUser && userRegion && (
               <span className="inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
                   Region: {userRegion}
                 </span>
-                {regionProgress && (
-                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getStatusBadge(regionProgress.status)}`}>
-                    Status: {regionProgress.status}
-                  </span>
-                )}
-                {regionProgress?.approval_level && (
-                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getApprovalLevelBadge(regionProgress.approval_level)}`}>
-                    {getApprovalLevelLabel(regionProgress.approval_level)}
-                  </span>
-                )}
+                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getStatusBadge(headerStatus)}`}>
+                  Status: {headerStatus}
+                </span>
+                <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getApprovalLevelBadge(headerApprovalLevel)}`}>
+                  {getApprovalLevelLabel(headerApprovalLevel)}
+                </span>
               </span>
             )}
             {isAdminUser && (
@@ -1443,6 +1487,11 @@ const ObligationDetails = () => {
                 <span className="text-xs bg-purple-100 text-purple-800 px-2 py-0.5 rounded-full">
                   Admin - All Regions
                 </span>
+                {currentProgress && (
+                  <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${getApprovalLevelBadge(headerApprovalLevel)}`}>
+                    {getApprovalLevelLabel(headerApprovalLevel)}
+                  </span>
+                )}
               </span>
             )}
             {isManager && (
@@ -1598,12 +1647,18 @@ const ObligationDetails = () => {
                   {obligation.mandatory ? "Yes" : "No"}
                 </dd>
               </div>
-              {obligation.approval_level && (
+              {currentProgress && (
                 <div className="col-span-1 sm:col-span-2">
-                  <dt className="text-xs sm:text-sm font-medium text-gray-500">Approval Status</dt>
-                  <dd className="mt-1">
-                    <span className={`px-2 py-1 text-xs font-medium rounded-full ${getApprovalLevelBadge(obligation.approval_level)}`}>
-                      {getApprovalLevelLabel(obligation.approval_level)}
+                  <dt className="text-xs sm:text-sm font-medium text-gray-500">Current Occurrence</dt>
+                  <dd className="mt-1 flex items-center flex-wrap gap-2">
+                    <span className="text-xs sm:text-sm text-gray-900">
+                      {formatDate(currentProgress.occurrence_date)}
+                    </span>
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getStatusBadge(currentProgress.status)}`}>
+                      {currentProgress.status}
+                    </span>
+                    <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${getApprovalLevelBadge(currentProgress.approval_level)}`}>
+                      {getApprovalLevelLabel(currentProgress.approval_level)}
                     </span>
                   </dd>
                 </div>
@@ -1611,7 +1666,7 @@ const ObligationDetails = () => {
             </dl>
           </div>
 
-          {/* Approval Actions - Updated for two-level */}
+          {/* Approval Actions */}
           {approvalActions.canApprove && pendingItem && (
             <div className="bg-white rounded-lg shadow p-4 sm:p-6 border-l-4 border-yellow-400">
               <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
@@ -1626,6 +1681,11 @@ const ObligationDetails = () => {
                 <p className="text-xs text-gray-600 mt-1">
                   Region: <span className="font-medium">{pendingItem.region?.name || "N/A"}</span>
                 </p>
+                {pendingItem.occurrence_date && (
+                  <p className="text-xs text-gray-600 mt-1">
+                    Occurrence: <span className="font-medium">{formatDate(pendingItem.occurrence_date)}</span>
+                  </p>
+                )}
                 <p className="text-xs text-gray-600 mt-1">
                   Approval Level: <span className={`font-medium ${getApprovalLevelBadge(pendingItem.approval_level)}`}>
                     {getApprovalLevelLabel(pendingItem.approval_level)}
@@ -1776,6 +1836,11 @@ const ObligationDetails = () => {
           <div className="bg-white rounded-lg shadow p-4 sm:p-6">
             <h3 className="text-base sm:text-lg font-semibold text-gray-900 mb-3 sm:mb-4">
               Evidence
+              {currentProgress && (
+                <span className="ml-2 text-xs font-normal text-gray-500">
+                  (for {formatDate(currentProgress.occurrence_date)})
+                </span>
+              )}
             </h3>
             <div className="space-y-4">
               {canUploadEvidence && (
@@ -1861,11 +1926,10 @@ const ObligationDetails = () => {
                 </div>
               )}
 
-              {/* Display uploaded evidence with delete button */}
               {evidence.length > 0 ? (
                 <>
                   <h4 className="text-sm font-semibold text-green-500 mb-2">
-                    Uploaded Evidence
+                    Uploaded Evidence ({evidence.length})
                   </h4>
                   <div className="space-y-2 max-h-60 overflow-y-auto">
                     {evidence.map((item) => {
@@ -1889,11 +1953,6 @@ const ObligationDetails = () => {
                                 Uploaded: {formatDateTime(item.uploaded_at)}
                                 {item.file_size && ` • Size: ${formatFileSize(item.file_size)}`}
                               </p>
-                              {item.file_type && (
-                                <p className="text-[10px] text-gray-400">
-                                  Type: {item.file_type}
-                                </p>
-                              )}
                               {item.progress && (
                                 <div className="flex items-center flex-wrap gap-2 mt-1">
                                   <span className="text-[10px] text-gray-500">
@@ -1903,11 +1962,6 @@ const ObligationDetails = () => {
                                     {item.progress.status}
                                   </span>
                                 </div>
-                              )}
-                              {!isAdminUser && item.region_id && (
-                                <span className="inline-block px-1.5 py-0.5 text-[10px] rounded-full bg-green-100 text-green-800 mt-1">
-                                  Region Uploaded
-                                </span>
                               )}
                             </div>
                             <div className="flex items-center gap-1 flex-shrink-0">
@@ -2002,7 +2056,7 @@ const ObligationDetails = () => {
                     />
                   </svg>
                   <p className="text-xs sm:text-sm text-gray-500 mt-2">
-                    No evidence uploaded yet
+                    No evidence uploaded yet for this occurrence
                   </p>
                   {canUploadEvidence && (
                     <p className="text-[10px] text-gray-400">
@@ -2186,7 +2240,6 @@ const ObligationDetails = () => {
             </div>
             <div className="p-4 overflow-y-auto max-h-[60vh]">
               <div className="space-y-4">
-                {/* Regional Upload */}
                 <div className="flex items-start gap-3">
                   <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center flex-shrink-0">
                     <svg className="h-4 w-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2200,7 +2253,6 @@ const ObligationDetails = () => {
                   </div>
                 </div>
 
-                {/* Manager Approval */}
                 {approvalHistory.manager_approved_by && (
                   <div className="flex items-start gap-3">
                     <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
@@ -2218,7 +2270,6 @@ const ObligationDetails = () => {
                   </div>
                 )}
 
-                {/* Admin Approval */}
                 {approvalHistory.admin_approved_by && (
                   <div className="flex items-start gap-3">
                     <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0">

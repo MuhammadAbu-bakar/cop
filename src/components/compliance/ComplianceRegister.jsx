@@ -152,6 +152,23 @@ const ComplianceRegister = () => {
     }, 5000);
   };
 
+  // ============================================================
+  // KEY FIX: Helper to build navigation URL with progress context
+  // Each row represents a SPECIFIC occurrence (progress record),
+  // so we pass the progress_id in the URL to scope the detail view.
+  // ============================================================
+  const buildObligationUrl = (obligation) => {
+    const progressId = obligation.progress_id 
+      || obligation.latestProgress?.id 
+      || obligation._progress?.id 
+      || obligation.progressRecords?.[0]?.id;
+    
+    if (progressId) {
+      return `/compliance/${obligation.obligation_id}?progress=${progressId}`;
+    }
+    return `/compliance/${obligation.obligation_id}`;
+  };
+
   // Parse URL parameters
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -192,9 +209,7 @@ const ComplianceRegister = () => {
 
   // Re-fetch when filters change (except search - handled separately)
   useEffect(() => {
-    // Don't fetch on search term change if it's the same as debounced
     if (searchTerm === debouncedSearchTerm) {
-      // Only fetch if other filters changed
       fetchObligations();
     }
   }, [filterStatus, filterDomain, filterRegion, filterMonth, activeTab]);
@@ -300,11 +315,9 @@ const ComplianceRegister = () => {
         filters.obligation_type = 'Event';
       }
 
-      // Pass month filter
       if (filterMonth) {
         filters.month = filterMonth;
       }
-      // Always pass current year
       filters.year = currentYear.toString();
 
       console.log('📊 Fetching obligations with filters:', filters);
@@ -321,10 +334,9 @@ const ComplianceRegister = () => {
         
         if (result.data && result.data.length > 0) {
           console.log('📅 Sample obligation calculated_due_date:', result.data[0].calculated_due_date);
-          console.log('📅 Sample obligation frequency:', result.data[0].frequency);
+          console.log('📅 Sample obligation progress_id:', result.data[0].progress_id);
+          console.log('📅 Sample obligation occurrence_date:', result.data[0].occurrence_date);
           console.log('📅 Sample obligation current_status:', result.data[0].current_status);
-          console.log('📅 Sample obligation region:', result.data[0].region);
-          console.log('📅 Sample obligation region_id:', result.data[0].region_id);
           console.log('📅 Sample obligation approval_level:', result.data[0].approval_level);
         }
         
@@ -347,7 +359,6 @@ const ComplianceRegister = () => {
       
       const regionId = await getRegionId(userRegion || eventObligation.region);
       
-      // Generate obligation ID if not provided
       let obligationId = eventObligation.obligation_id;
       if (!obligationId) {
         const existingIds = obligations
@@ -360,7 +371,6 @@ const ComplianceRegister = () => {
         obligationId = `MS-${String(nextId).padStart(3, "0")}`;
       }
 
-      // Check if obligation already exists in compliance_obligations
       const { data: existing, error: checkError } = await supabase
         .from("compliance_obligations")
         .select("obligation_id")
@@ -418,7 +428,7 @@ const ComplianceRegister = () => {
         obligationData = data[0];
       }
 
-      // Check if progress record already exists for this obligation and region
+      // Check if progress record already exists
       if (regionId && obligationData) {
         const { data: existingProgress, error: progressCheckError } = await supabase
           .from("compliance_progress")
@@ -510,7 +520,7 @@ const ComplianceRegister = () => {
     }
   };
 
-  // Status badge - Updated with approval level indicator
+  // Status badge
   const getStatusBadge = (status) => {
     const badges = {
       'Open': "bg-gray-100 text-gray-800",
@@ -1018,29 +1028,12 @@ const ComplianceRegister = () => {
 
     let filtered = [...obligations];
 
-    // Filter by obligation type based on tab
     if (activeTab === "todo") {
       filtered = filtered.filter(o => o.obligation_type === "Cyclic" || o.obligation_type === "Event");
     } else if (activeTab === "eventlist") {
       filtered = filtered.filter(o => o.obligation_type === "Event");
     }
 
-    if (filtered.length > 0) {
-      console.log('📅 Sample filtered obligation calculated_due_date:', filtered[0]?.calculated_due_date);
-      console.log('📅 Sample filtered obligation current_status:', filtered[0]?.current_status);
-      console.log('📅 Sample filtered obligation approval_level:', filtered[0]?.approval_level);
-      
-      const years = new Set();
-      filtered.forEach(o => {
-        if (o.calculated_due_date) {
-          const year = new Date(o.calculated_due_date).getFullYear();
-          years.add(year);
-        }
-      });
-      console.log('📅 Years present in calculated_due_date:', [...years]);
-    }
-
-    // Apply search filter
     if (debouncedSearchTerm) {
       const searchLower = debouncedSearchTerm.toLowerCase();
       filtered = filtered.filter((item) => {
@@ -1054,7 +1047,6 @@ const ComplianceRegister = () => {
       });
     }
 
-    // Apply status filter
     if (filterStatus && filterStatus !== 'all') {
       filtered = filtered.filter((item) => {
         const status = item.current_status || 'Open';
@@ -1062,66 +1054,34 @@ const ComplianceRegister = () => {
       });
     }
 
-    // Apply domain filter
     if (filterDomain && filterDomain !== 'all') {
       filtered = filtered.filter((item) => {
         return item.domain === filterDomain;
       });
     }
 
-    // Apply region filter (admin only)
     if (isAdminUser && filterRegion && filterRegion !== 'all') {
       const selectedRegion = regions.find(r => r.name === filterRegion);
-      console.log('🔍 Filtering by region:', filterRegion, 'Selected region object:', selectedRegion);
       
       filtered = filtered.filter((item) => {
-        // Check 1: Direct region field match
-        if (item.region && item.region === filterRegion) {
-          console.log('✅ Matched by region field:', item.obligation_id);
-          return true;
-        }
-        
-        // Check 2: region_id match
-        if (selectedRegion && item.region_id === selectedRegion.id) {
-          console.log('✅ Matched by region_id:', item.obligation_id);
-          return true;
-        }
-        
-        // Check 3: Check progress records for region match
+        if (item.region && item.region === filterRegion) return true;
+        if (selectedRegion && item.region_id === selectedRegion.id) return true;
         if (item.progressRecords && Array.isArray(item.progressRecords) && item.progressRecords.length > 0) {
           const hasMatchingProgress = item.progressRecords.some(progress => {
-            if (progress.region && progress.region.name === filterRegion) {
-              return true;
-            }
-            if (selectedRegion && progress.region_id === selectedRegion.id) {
-              return true;
-            }
+            if (progress.region && progress.region.name === filterRegion) return true;
+            if (selectedRegion && progress.region_id === selectedRegion.id) return true;
             return false;
           });
-          if (hasMatchingProgress) {
-            console.log('✅ Matched by progress records:', item.obligation_id);
-            return true;
-          }
+          if (hasMatchingProgress) return true;
         }
-        
-        // Check 4: Check latestProgress
         if (item.latestProgress) {
-          if (item.latestProgress.region && item.latestProgress.region.name === filterRegion) {
-            console.log('✅ Matched by latestProgress region:', item.obligation_id);
-            return true;
-          }
-          if (selectedRegion && item.latestProgress.region_id === selectedRegion.id) {
-            console.log('✅ Matched by latestProgress region_id:', item.obligation_id);
-            return true;
-          }
+          if (item.latestProgress.region && item.latestProgress.region.name === filterRegion) return true;
+          if (selectedRegion && item.latestProgress.region_id === selectedRegion.id) return true;
         }
-        
         return false;
       });
-      console.log(`📊 Filtered by region: ${filterRegion}, ${filtered.length} remaining`);
     }
 
-    // Apply month filter
     if (filterMonth) {
       filtered = filtered.filter((item) => {
         const dueDate = item.calculated_due_date;
@@ -1132,7 +1092,6 @@ const ComplianceRegister = () => {
       });
     }
 
-    // Apply sorting
     if (sortField === 'dueDate') {
       filtered.sort((a, b) => {
         const dateA = a.calculated_due_date ? new Date(a.calculated_due_date) : new Date(0);
@@ -1154,7 +1113,6 @@ const ComplianceRegister = () => {
       });
     }
 
-    console.log(`📊 Filtered ${filtered.length} obligations`);
     return filtered;
   };
 
@@ -1205,18 +1163,15 @@ const ComplianceRegister = () => {
 
   // Hover handlers with 1.5 second delay
   const handleMouseEnter = (id) => {
-    // Clear any existing timeout
     if (hoverTimeoutRef.current) {
       clearTimeout(hoverTimeoutRef.current);
     }
-    // Set a new timeout to show tooltip after 1.5 seconds
     hoverTimeoutRef.current = setTimeout(() => {
       setShowTooltipId(id);
     }, 1500);
   };
 
   const handleMouseLeave = () => {
-    // Clear the timeout and hide tooltip immediately
     if (hoverTimeoutRef.current) {
       clearTimeout(hoverTimeoutRef.current);
       hoverTimeoutRef.current = null;
@@ -1224,7 +1179,7 @@ const ComplianceRegister = () => {
     setShowTooltipId(null);
   };
 
-  // Render tooltip for obligation details - Updated with approval level
+  // Render tooltip for obligation details
   const renderTooltip = (obligation, dueDateColor, dueDate) => {
     const status = obligation.current_status || 'Open';
     const approvalLevel = obligation.approval_level || 'regional';
@@ -1284,6 +1239,12 @@ const ComplianceRegister = () => {
               <span className="font-medium text-gray-500">Region:</span>
               <span className="ml-1 text-gray-700">{obligation.region || 'N/A'}</span>
             </div>
+            {obligation.progress_id && (
+              <div className="col-span-2">
+                <span className="font-medium text-gray-500">Occurrence ID:</span>
+                <span className="ml-1 text-gray-700 font-mono text-[9px]">{obligation.progress_id.substring(0, 8)}...</span>
+              </div>
+            )}
             {obligation.manager_approved_by && (
               <div className="col-span-2">
                 <span className="font-medium text-gray-500">Manager Approved:</span>
@@ -1447,7 +1408,6 @@ const ComplianceRegister = () => {
             Compliance Register
           </h1>
           <p className="text-sm text-gray-500 mt-1">
-            
             {!isAdminUser && userRegion && (
               <span className="ml-2 inline-flex items-center">
                 <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded-full">
@@ -1726,7 +1686,6 @@ const ComplianceRegister = () => {
                 ))}
               </select>
             </div>
-            {/* Region Filter - Admin Only */}
             {isAdminUser && (
               <div>
                 <select
@@ -1907,7 +1866,9 @@ const ComplianceRegister = () => {
                     const dueDateColor = getDueDateColor(dueDate);
                     const status = obligation.current_status || 'Open';
                     const approvalLevel = obligation.approval_level || 'regional';
-                    const uniqueKey = `${obligation.id}-${index}`;
+                    // Use progress_id in the key so each occurrence row is unique
+                    const uniqueKey = `${obligation.obligation_id}-${obligation.progress_id || obligation.id}-${index}`;
+                    const detailUrl = buildObligationUrl(obligation);
 
                     return (
                       <tr
@@ -1915,12 +1876,13 @@ const ComplianceRegister = () => {
                         className="hover:bg-gray-50 transition-colors relative cursor-pointer"
                         onMouseEnter={() => handleMouseEnter(uniqueKey)}
                         onMouseLeave={handleMouseLeave}
-                        onClick={() => navigate(`/compliance/${obligation.obligation_id}`)}
+                        onClick={() => navigate(detailUrl)}
                       >
                         <td className="px-2 py-2 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center space-x-1">
+                            {/* KEY FIX: Link now passes ?progress=<id> */}
                             <Link
-                              to={`/compliance/${obligation.obligation_id}`}
+                              to={detailUrl}
                               className="inline-flex items-center justify-center p-1 bg-[#8cc63e] text-white rounded hover:bg-[#7ab83a] transition-colors"
                               title="View Details"
                               onClick={(e) => e.stopPropagation()}
