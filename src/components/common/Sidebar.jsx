@@ -99,17 +99,18 @@ const Sidebar = () => {
               className={({ isActive }) =>
                 `flex flex-col items-center justify-center px-1 py-1.5 lg:py-2 rounded-lg mb-0.5 transition-all duration-200 text-[7px] lg:text-[8px] ${
                   isActive
-                    ? "bg-white/20 text-white font-medium shadow-sm"
-                    : "text-green-100 hover:bg-white/10 hover:text-white"
+                    ? "text-white font-medium shadow-sm"
+                    : "text-white hover:bg-white/10"
                 }`
               }
+              style={({ isActive }) => ({
+                backgroundColor: isActive ? "#ff0099" : "transparent",
+              })}
             >
               {({ isActive }) => (
                 <>
                   <svg
-                    className={`h-4 w-4 lg:h-5 lg:w-5 mb-0.5 flex-shrink-0 ${
-                      isActive ? "text-white" : "text-green-200"
-                    }`}
+                    className="h-4 w-4 lg:h-5 lg:w-5 mb-0.5 flex-shrink-0 text-white"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -121,7 +122,7 @@ const Sidebar = () => {
                       d={item.icon}
                     />
                   </svg>
-                  <span className="text-center leading-tight truncate w-full px-0.5">
+                  <span className="text-center leading-tight truncate w-full px-0.5 text-white">
                     {item.name}
                   </span>
                 </>
@@ -155,14 +156,18 @@ const Sidebar = () => {
             to="/dashboard"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -174,7 +179,7 @@ const Sidebar = () => {
                     d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Home</span>
+                <span className="mt-0.5 text-[6px] text-white">Home</span>
               </>
             )}
           </NavLink>
@@ -184,14 +189,18 @@ const Sidebar = () => {
             to="/compliance"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -203,7 +212,7 @@ const Sidebar = () => {
                     d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Obligations</span>
+                <span className="mt-0.5 text-[6px] text-white">Obligations</span>
               </>
             )}
           </NavLink>
@@ -213,14 +222,18 @@ const Sidebar = () => {
             to="/calendar"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -232,7 +245,7 @@ const Sidebar = () => {
                     d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Calendar</span>
+                <span className="mt-0.5 text-[6px] text-white">Calendar</span>
               </>
             )}
           </NavLink>
@@ -243,14 +256,18 @@ const Sidebar = () => {
               to="/approvals"
               className={({ isActive }) =>
                 `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                  isActive ? "text-white" : "text-green-100 hover:text-white"
+                  isActive ? "text-white" : "text-white"
                 }`
               }
+              style={({ isActive }) => ({
+                backgroundColor: isActive ? "#e40076" : "transparent",
+                borderRadius: "6px",
+              })}
             >
               {({ isActive }) => (
                 <>
                   <svg
-                    className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                    className="h-4 w-4 text-white"
                     fill="none"
                     stroke="currentColor"
                     viewBox="0 0 24 24"
@@ -262,7 +279,7 @@ const Sidebar = () => {
                       d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"
                     />
                   </svg>
-                  <span className="mt-0.5 text-[6px]">Approvals</span>
+                  <span className="mt-0.5 text-[6px] text-white">Approvals</span>
                 </>
               )}
             </NavLink>
@@ -273,14 +290,18 @@ const Sidebar = () => {
             to="/reports"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -292,7 +313,7 @@ const Sidebar = () => {
                     d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l3 3 3-3"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Reports</span>
+                <span className="mt-0.5 text-[6px] text-white">Reports</span>
               </>
             )}
           </NavLink>
@@ -302,14 +323,18 @@ const Sidebar = () => {
             to="/audit-history"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -321,7 +346,7 @@ const Sidebar = () => {
                     d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Audit</span>
+                <span className="mt-0.5 text-[6px] text-white">Audit</span>
               </>
             )}
           </NavLink>
@@ -331,14 +356,18 @@ const Sidebar = () => {
             to="/policies"
             className={({ isActive }) =>
               `flex flex-col items-center py-1 px-1 text-[7px] transition-colors min-w-[50px] ${
-                isActive ? "text-white" : "text-green-100 hover:text-white"
+                isActive ? "text-white" : "text-white"
               }`
             }
+            style={({ isActive }) => ({
+              backgroundColor: isActive ? "#e40076" : "transparent",
+              borderRadius: "6px",
+            })}
           >
             {({ isActive }) => (
               <>
                 <svg
-                  className={`h-4 w-4 ${isActive ? "text-white" : "text-green-200"}`}
+                  className="h-4 w-4 text-white"
                   fill="none"
                   stroke="currentColor"
                   viewBox="0 0 24 24"
@@ -350,7 +379,7 @@ const Sidebar = () => {
                     d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                   />
                 </svg>
-                <span className="mt-0.5 text-[6px]">Policies</span>
+                <span className="mt-0.5 text-[6px] text-white">Policies</span>
               </>
             )}
           </NavLink>
